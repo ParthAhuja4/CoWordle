@@ -94,6 +94,7 @@ function setLoading(text) {
 
 function showLoadingError(text) {
   show('loading');
+  $('#screen-loading').classList.add('failed');
   $('#loading-text').textContent = 'Could not start CoWordle.';
   const el = $('#loading-error');
   el.textContent = text;
@@ -212,6 +213,13 @@ function initials(name) {
   return String(name ?? '?').trim().slice(0, 1).toUpperCase() || '?';
 }
 
+function badge(kind, text) {
+  const el = document.createElement('span');
+  el.className = `badge ${kind}`;
+  el.textContent = text;
+  return el;
+}
+
 function scoreText(snap) {
   const ids = Object.keys(snap.score).filter((k) => k !== 'draws');
   if (!ids.length) return '';
@@ -231,30 +239,40 @@ function renderLobby(snap) {
   show('lobby');
   const isHost = snap.hostId === snap.me;
   const list = $('#lobby-players');
-  list.replaceChildren(
-    ...snap.members.map((m) => {
-      const li = document.createElement('li');
-      li.className = 'member';
-      li.appendChild(avatarEl(m));
-      const name = document.createElement('span');
-      name.className = 'name';
-      name.textContent = m.name + (m.id === snap.me ? ' (you)' : '');
-      li.appendChild(name);
-      if (m.id === snap.hostId) {
-        const tag = document.createElement('span');
-        tag.className = 'tag';
-        tag.textContent = '👑 host';
-        li.appendChild(tag);
-      }
-      return li;
-    }),
-  );
-  $('#lobby-count').textContent = `${snap.members.length}/${snap.settings.maxPlayers}`;
+  const rows = snap.members.map((m) => {
+    const li = document.createElement('li');
+    li.className = 'member' + (m.id === snap.me ? ' me' : '');
+    li.appendChild(avatarEl(m));
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = m.name;
+    li.appendChild(name);
+    if (m.id === snap.me) li.appendChild(badge('you', 'you'));
+    if (m.id === snap.hostId) li.appendChild(badge('host', 'host'));
+    return li;
+  });
+  for (let i = snap.members.length; i < snap.settings.maxPlayers; i++) {
+    const li = document.createElement('li');
+    li.className = 'member empty';
+    const av = document.createElement('div');
+    av.className = 'avatar';
+    av.textContent = '+';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = 'Open slot';
+    li.append(av, name);
+    rows.push(li);
+  }
+  list.replaceChildren(...rows);
+  $('#lobby-count').textContent = `${snap.members.length} / ${snap.settings.maxPlayers}`;
+  $('#mode-lock').hidden = isHost;
 
   const modeSeg = $('#mode-picker');
   modeSeg.setAttribute('aria-disabled', String(!isHost));
   for (const b of modeSeg.querySelectorAll('button')) {
-    b.classList.toggle('on', b.dataset.mode === snap.settings.mode);
+    const on = b.dataset.mode === snap.settings.mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
     b.disabled = !isHost;
   }
   $('#mode-desc').textContent = MODE_DESC[snap.settings.mode] + ` ${snap.settings.turnSeconds}s per ${snap.settings.mode === 'turn' ? 'turn' : 'guess'}.`;
@@ -263,7 +281,9 @@ function renderLobby(snap) {
   const turnsSeg = $('#turns-picker');
   turnsSeg.setAttribute('aria-disabled', String(!isHost));
   for (const b of turnsSeg.querySelectorAll('button')) {
-    b.classList.toggle('on', Number(b.dataset.turns) === snap.settings.turnsEach);
+    const on = Number(b.dataset.turns) === snap.settings.turnsEach;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
     b.disabled = !isHost;
   }
 
@@ -323,7 +343,9 @@ function renderGame(snap) {
     ...snap.participants.map((id) => {
       const m = member(snap, id);
       const c = document.createElement('div');
-      c.className = 'chip' + (id === snap.me ? ' me' : '') + (m.role === 'left' ? ' left' : '');
+      const isTurn = playing && round?.kind === 'turn' && round.turnUserId === id;
+      const isDone = round?.kind === 'duel' && round.boards[id]?.solvedAt != null;
+      c.className = 'chip' + (id === snap.me ? ' me' : '') + (m.role === 'left' ? ' left' : '') + (isTurn ? ' turn' : '') + (isDone ? ' done' : '');
       c.appendChild(avatarEl(m));
       const n = document.createElement('span');
       n.className = 'n';
@@ -338,7 +360,9 @@ function renderGame(snap) {
   $('#round-label').textContent = `${round?.kind === 'turn' ? 'Turn-by-Turn' : 'Duel'} · Round ${snap.roundNumber}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
 
   // Status line
-  $('#status').innerHTML = statusHtml(snap);
+  const status = $('#status');
+  status.innerHTML = statusHtml(snap);
+  status.classList.toggle('hot', playing && canGuess(snap));
 
   // Boards
   const boards = $('#boards');
@@ -512,15 +536,25 @@ function renderTurnBoard(snap) {
 
 function resultCard(snap) {
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'result';
   const res = snap.result ?? { winnerIds: [], result: 'draw', secret: snap.round?.secret ?? '' };
-  const h = document.createElement('h3');
   const names = res.winnerIds.map((id) => member(snap, id).name);
   const meWon = res.winnerIds.includes(snap.me);
-  if (res.winnerIds.length === 1) h.textContent = meWon ? '🏆 You win!' : `🏆 ${names[0]} wins`;
-  else if (res.winnerIds.length > 1) h.textContent = meWon ? '🤝 You tied!' : `🤝 Tie: ${names.join(' & ')}`;
-  else h.textContent = '😶 Nobody got it';
-  card.appendChild(h);
+
+  const emoji = document.createElement('div');
+  emoji.className = 'result-emoji';
+  const h = document.createElement('h3');
+  if (res.winnerIds.length === 1) {
+    emoji.textContent = meWon ? '🏆' : '🎉';
+    h.textContent = meWon ? 'You win!' : `${names[0]} wins`;
+  } else if (res.winnerIds.length > 1) {
+    emoji.textContent = '🤝';
+    h.textContent = meWon ? 'You tied!' : `Tie: ${names.join(' & ')}`;
+  } else {
+    emoji.textContent = '😶';
+    h.textContent = 'Nobody got it';
+  }
+  card.append(emoji, h);
 
   const word = document.createElement('div');
   word.className = 'word';
@@ -531,15 +565,34 @@ function resultCard(snap) {
   }
   card.appendChild(word);
 
-  const sub = document.createElement('p');
-  sub.className = 'sub';
-  sub.textContent = scoreText(snap);
-  card.appendChild(sub);
+  const board = document.createElement('div');
+  board.className = 'scoreboard';
+  const ids = Object.keys(snap.score).filter((k) => k !== 'draws').sort((a, b) => snap.score[b] - snap.score[a]);
+  for (const id of ids) {
+    const m = member(snap, id);
+    const row = document.createElement('div');
+    row.className = 'srow' + (res.winnerIds.includes(id) ? ' win' : '');
+    const n = document.createElement('span');
+    n.className = 'sn';
+    n.textContent = m.name + (id === snap.me ? ' (you)' : '');
+    const s = document.createElement('span');
+    s.className = 'ss';
+    s.textContent = snap.score[id];
+    row.append(avatarEl(m), n, s);
+    board.appendChild(row);
+  }
+  if (snap.score.draws) {
+    const d = document.createElement('div');
+    d.className = 'srow draws';
+    d.textContent = `${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}`;
+    board.appendChild(d);
+  }
+  card.appendChild(board);
 
   const rm = snap.rematch ?? { votes: [], needed: [], deadline: null };
   const iVote = snap.participants.includes(snap.me) && rm.needed.includes(snap.me);
   const btn = document.createElement('button');
-  btn.className = 'primary';
+  btn.className = 'btn btn-primary btn-lg';
   if (iVote) {
     const voted = rm.votes.includes(snap.me);
     btn.textContent = voted ? `Waiting for others (${rm.votes.length}/${rm.needed.length})` : `Play again (${rm.votes.length}/${rm.needed.length})`;
@@ -554,16 +607,18 @@ function resultCard(snap) {
   const votes = document.createElement('div');
   votes.className = 'votes';
   for (const id of rm.needed) {
+    const m = member(snap, id);
+    const yes = rm.votes.includes(id);
     const v = document.createElement('span');
-    v.className = 'v' + (rm.votes.includes(id) ? ' yes' : '');
-    v.textContent = `${rm.votes.includes(id) ? '✓ ' : ''}${member(snap, id).name}`;
+    v.className = 'v' + (yes ? ' yes' : '');
+    v.appendChild(avatarEl(m));
+    v.appendChild(document.createTextNode(`${m.name}${yes ? ' ✓' : ''}`));
     votes.appendChild(v);
   }
   card.appendChild(votes);
 
   const cd = document.createElement('p');
-  cd.className = 'sub';
-  cd.style.marginTop = '10px';
+  cd.className = 'countdown';
   cd.dataset.deadline = rm.deadline ?? '';
   cd.id = 'vote-countdown';
   card.appendChild(cd);
@@ -650,13 +705,16 @@ $('#forfeit-btn').addEventListener('click', (e) => {
     clearTimeout(forfeitArmed);
     forfeitArmed = null;
     btn.textContent = 'Forfeit round';
+    btn.classList.remove('armed');
     send({ t: 'forfeit' });
     return;
   }
   btn.textContent = 'Tap again to forfeit';
+  btn.classList.add('armed');
   forfeitArmed = setTimeout(() => {
     forfeitArmed = null;
     btn.textContent = 'Forfeit round';
+    btn.classList.remove('armed');
   }, 3000);
 });
 

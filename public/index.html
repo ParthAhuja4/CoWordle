@@ -4,68 +4,104 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0e1016" />
   <title>CoWordle</title>
   <link rel="stylesheet" href="style.css" />
   <script src="config.js"></script>
 </head>
 <body>
   <div id="app">
-    <section id="screen-loading" class="screen">
-      <div class="logo">Co<span>Wordle</span></div>
-      <p id="loading-text">Connecting to Discord…</p>
+    <!-- Loading / error -->
+    <section id="screen-loading" class="screen screen-loading">
+      <div class="brand brand-lg">
+        <span class="brand-mark" aria-hidden="true">
+          <i class="g"></i><i class="y"></i><i class="x"></i><i class="g"></i>
+        </span>
+        <span class="brand-name">Co<em>Wordle</em></span>
+      </div>
+      <div class="loader" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <p id="loading-text" class="loading-text">Connecting to Discord…</p>
       <p id="loading-error" class="error" hidden></p>
     </section>
 
-    <section id="screen-lobby" class="screen" hidden>
-      <header class="lobby-head">
-        <div class="logo small">Co<span>Wordle</span></div>
-        <div id="lobby-score" class="score-line" hidden></div>
-      </header>
-      <div class="lobby-body">
-        <div class="players">
-          <h2>Players <span id="lobby-count"></span></h2>
-          <ul id="lobby-players"></ul>
-          <p class="hint">Invite friends to this Activity. Everyone who opens it from this channel joins the room.</p>
+    <!-- Lobby -->
+    <section id="screen-lobby" class="screen screen-lobby" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <i class="g"></i><i class="y"></i><i class="x"></i><i class="g"></i>
+          </span>
+          <span class="brand-name">Co<em>Wordle</em></span>
         </div>
-        <div class="settings">
-          <h2>Mode</h2>
-          <div class="seg" id="mode-picker">
-            <button data-mode="duel" class="seg-btn">⚔️ Duel</button>
-            <button data-mode="turn" class="seg-btn">🎮 Turn-by-Turn</button>
+        <div id="lobby-score" class="pill" hidden></div>
+      </header>
+
+      <main class="lobby-body">
+        <section class="card">
+          <div class="card-head">
+            <h2>Players</h2>
+            <span id="lobby-count" class="count"></span>
+          </div>
+          <ul id="lobby-players" class="player-list"></ul>
+          <p class="hint">Friends who open this Activity from the channel join the room automatically.</p>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Game mode</h2>
+            <span id="mode-lock" class="count" hidden>Host picks</span>
+          </div>
+          <div id="mode-picker" class="mode-grid" role="radiogroup" aria-label="Game mode">
+            <button data-mode="duel" class="mode-card" role="radio" aria-checked="false">
+              <span class="mode-icon" aria-hidden="true">⚔️</span>
+              <span class="mode-text">
+                <span class="mode-title">Duel</span>
+                <span class="mode-sub">Own board, same word</span>
+              </span>
+            </button>
+            <button data-mode="turn" class="mode-card" role="radio" aria-checked="false">
+              <span class="mode-icon" aria-hidden="true">🔁</span>
+              <span class="mode-text">
+                <span class="mode-title">Turn-by-Turn</span>
+                <span class="mode-sub">One shared board</span>
+              </span>
+            </button>
           </div>
           <p id="mode-desc" class="desc"></p>
           <div id="turns-row" class="turns-row" hidden>
-            <span>Turns each</span>
-            <div class="seg" id="turns-picker">
-              <button data-turns="1" class="seg-btn">1</button>
-              <button data-turns="2" class="seg-btn">2</button>
-              <button data-turns="3" class="seg-btn">3</button>
+            <span class="turns-label">Turns per player</span>
+            <div class="seg" id="turns-picker" role="radiogroup" aria-label="Turns per player">
+              <button data-turns="1" class="seg-btn" role="radio" aria-checked="false">1</button>
+              <button data-turns="2" class="seg-btn" role="radio" aria-checked="false">2</button>
+              <button data-turns="3" class="seg-btn" role="radio" aria-checked="false">3</button>
             </div>
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
+
       <footer class="lobby-foot">
-        <button id="start-btn" class="primary">Start game</button>
-        <p id="lobby-wait" class="hint" hidden></p>
+        <button id="start-btn" class="btn btn-primary btn-lg">Start game</button>
+        <p id="lobby-wait" class="wait" hidden></p>
       </footer>
     </section>
 
-    <section id="screen-game" class="screen" hidden>
+    <!-- Game -->
+    <section id="screen-game" class="screen screen-game" hidden>
       <header class="game-head">
         <div id="score-chips" class="chips"></div>
         <div id="round-label" class="round-label"></div>
       </header>
       <div id="status" class="status"></div>
-      <div class="timer"><div id="timer-fill" class="timer-fill"></div></div>
+      <div class="timer" aria-hidden="true"><div id="timer-fill" class="timer-fill"></div></div>
       <div id="boards" class="boards"></div>
-      <div id="overlay" class="overlay" hidden></div>
       <div id="keyboard" class="keyboard"></div>
       <footer class="game-foot">
-        <button id="forfeit-btn" class="ghost" hidden>Forfeit round</button>
+        <button id="forfeit-btn" class="btn btn-ghost btn-sm" hidden>Forfeit round</button>
       </footer>
+      <div id="overlay" class="overlay" hidden></div>
     </section>
 
-    <div id="toasts" class="toasts"></div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
   </div>
   <script src="app.js"></script>
 </body>
