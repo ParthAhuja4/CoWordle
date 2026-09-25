@@ -71,11 +71,20 @@ test('static page is served with the client id injected and proxy prefix strippe
   const res = await fetch(`${base}/.proxy/`);
   assert.equal(res.status, 200);
   const html = await res.text();
-  assert.match(html, /<script src="config.js">/);
-  const cfgJs = await (await fetch(`${base}/.proxy/config.js`)).text();
+  // Assets are versioned so phones fetch fresh copies after every deploy.
+  const [, version] = html.match(/<script src="config\.js\?v=([0-9a-f]{10})">/) ?? [];
+  assert.ok(version, 'config.js is versioned');
+  assert.match(html, new RegExp(`<link rel="stylesheet" href="style\\.css\\?v=${version}"`));
+  assert.match(html, new RegExp(`<script src="app\\.js\\?v=${version}">`));
+  const cfgJs = await (await fetch(`${base}/.proxy/config.js?v=${version}`)).text();
   assert.match(cfgJs, /"clientId":"123"/);
   assert.match(cfgJs, /"devLogin":true/);
-  assert.equal((await fetch(`${base}/style.css`)).status, 200);
+  const css = await fetch(`${base}/style.css?v=${version}`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get('cache-control'), /immutable/);
+  const bare = await fetch(`${base}/style.css`);
+  assert.equal(bare.status, 200);
+  assert.equal(bare.headers.get('cache-control'), 'no-cache');
   assert.equal((await fetch(`${base}/app.js`)).status, 200);
   assert.equal((await fetch(`${base}/../package.json`)).status, 404);
   assert.equal((await fetch(`${base}/health`)).status, 200);

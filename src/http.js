@@ -9,6 +9,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { exchangeCode, devSession } from './activity/auth.js';
 import { log } from './util/logger.js';
@@ -49,10 +50,31 @@ function readBody(req, limit = 8192) {
   });
 }
 
+/**
+ * Short fingerprint of the built assets. It goes into the asset URLs so every deploy
+ * is a new URL: Discord's mobile clients hold on to a cached style.css / app.js
+ * otherwise, and phones keep showing the previous UI.
+ */
+async function assetVersion() {
+  const hash = createHash('sha1');
+  for (const name of ['style.css', 'app.js']) {
+    try {
+      hash.update(await readFile(join(PUBLIC_DIR, name)));
+    } catch {
+      hash.update(String(Date.now()));
+    }
+  }
+  return hash.digest('hex').slice(0, 10);
+}
+
 export function createHttpServer({ config, isReady }) {
-  const indexHtmlPromise = readFile(join(PUBLIC_DIR, 'index.html'), 'utf8');
   // Served as a separate script (not inline) so it passes the Activity's Content Security Policy.
   const configJs = `window.COWORDLE = ${JSON.stringify({ clientId: config.clientId, devLogin: !!config.allowDevLogin })};\n`;
+  const indexHtmlPromise = (async () => {
+    const html = await readFile(join(PUBLIC_DIR, 'index.html'), 'utf8');
+    const v = await assetVersion();
+    return html.replace(/(href|src)="(style\.css|app\.js|config\.js)"/g, `$1="$2?v=${v}"`);
+  })();
 
   return createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -94,7 +116,10 @@ export function createHttpServer({ config, isReady }) {
         return json(res, 404, { error: 'not found' });
       }
       const data = await readFile(file);
-      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': 'no-cache' });
+      // Versioned URLs (from index.html) never change content, so they may be cached hard;
+      // anything else must be revalidated every time.
+      const cache = url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache';
+      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': cache });
       return res.end(data);
     } catch (err) {
       log.error(`${req.method} ${path} failed:`, err?.message ?? err);

@@ -314,7 +314,8 @@ function renderLobby(snap) {
     if (m.id === snap.hostId) li.appendChild(badge('host', 'host'));
     return li;
   });
-  for (let i = snap.members.length; i < snap.settings.maxPlayers; i++) {
+  const open = snap.settings.maxPlayers - snap.members.length;
+  for (let i = 0; i < open; i++) {
     const li = document.createElement('li');
     li.className = 'member empty';
     const av = document.createElement('div');
@@ -324,6 +325,13 @@ function renderLobby(snap) {
     name.className = 'name';
     name.textContent = 'Open slot';
     li.append(av, name);
+    rows.push(li);
+  }
+  if (open > 0) {
+    // Phones show this single pill instead of one dashed row per open slot (CSS picks).
+    const li = document.createElement('li');
+    li.className = 'member empty slots';
+    li.textContent = `+ ${open} open slot${open === 1 ? '' : 's'}`;
     rows.push(li);
   }
   list.replaceChildren(...rows);
