@@ -79,9 +79,17 @@ test('forfeit removes a player from contention', () => {
   assert.equal(hit(r, 'c').result, 'won');
   assert.deepEqual(r.winnerIds, ['c']);
 
+  // Last player standing wins outright.
   const r2 = mk();
-  forfeitDuel(r2, 'a');
-  assert.equal(forfeitDuel(r2, 'b'), 'draw');
+  assert.equal(forfeitDuel(r2, 'a'), 'won');
+  assert.deepEqual(r2.winnerIds, ['b']);
+  assert.equal(forfeitDuel(r2, 'b'), null, 'round already over');
+
+  // Everyone gone: draw.
+  const r3 = mk(['a', 'b', 'c']);
+  assert.equal(forfeitDuel(r3, 'a'), 'pending');
+  assert.equal(forfeitDuel(r3, 'b'), 'won');
+  assert.deepEqual(r3.winnerIds, ['c']);
 });
 
 test('three-way tie', () => {

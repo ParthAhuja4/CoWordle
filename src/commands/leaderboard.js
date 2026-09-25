@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, InteractionContextType, EmbedBuilder } from 'discord.js';
-import { ctx } from '../match/context.js';
-import { NO_PINGS } from '../util/discord.js';
+import { ctx } from '../util/context.js';
+import { NO_PINGS, ephemeral } from '../util/discord.js';
 
 export const data = new SlashCommandBuilder()
   .setName('leaderboard')
@@ -20,6 +20,7 @@ export const data = new SlashCommandBuilder()
 const MEDALS = ['🥇', '🥈', '🥉'];
 
 export async function execute(interaction) {
+  if (!ctx.stats) return interaction.reply(ephemeral('Stats are not enabled on this bot (no database configured).'));
   await interaction.deferReply();
   const sort = interaction.options.getString('sort') ?? 'wins';
   const rows = await ctx.stats.getLeaderboard(interaction.guildId, sort, 10, 5);
@@ -38,7 +39,7 @@ export async function execute(interaction) {
   const titles = { wins: 'Most wins', winrate: 'Best win rate', streak: 'Longest streak' };
   const embed = new EmbedBuilder()
     .setTitle(`🏆 Leaderboard · ${titles[sort]}`)
-    .setDescription(lines.length ? lines.join('\n') : 'No games played yet. Start one with `/play`!')
+    .setDescription(lines.length ? lines.join('\n') : 'No games played yet. Start one with `/cowordle`!')
     .setColor(0xf5c518);
   return interaction.editReply({ embeds: [embed], allowedMentions: NO_PINGS });
 }

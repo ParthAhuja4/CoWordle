@@ -1,0 +1,25 @@
+# Render Blueprint: one free web service that runs the bot and hosts the Activity.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: cowordle
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run words && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: cowordle
+      - key: TURN_SECONDS
+        value: "30"

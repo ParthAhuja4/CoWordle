@@ -1,41 +1,43 @@
-import { createServer } from 'node:http';
 import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
 import { config } from './config.js';
 import { connectMongo } from './db/mongo.js';
 import { StatsRepo } from './db/stats.js';
-import { ctx } from './match/context.js';
+import { ctx } from './util/context.js';
 import { commandMap } from './commands/index.js';
-import { dispatchButton } from './buttons/index.js';
-import { getMatchByThread } from './match/registry.js';
-import { endMatch } from './match/lifecycle.js';
 import { ANSWERS, ALLOWED } from './game/words.js';
+import { createHttpServer } from './http.js';
+import { attachWebSocket } from './activity/ws.js';
+import { destroyAllRooms } from './activity/rooms.js';
 import { log } from './util/logger.js';
 
-const { db, client: mongo } = await connectMongo(config.mongoUri, config.mongoDb);
-log.info(`MongoDB connected (${config.mongoDb})`);
+ctx.config = config;
+
+let mongo = null;
+if (config.mongoUri) {
+  const conn = await connectMongo(config.mongoUri, config.mongoDb);
+  mongo = conn.client;
+  ctx.stats = new StatsRepo(conn.db);
+  log.info(`MongoDB connected (${config.mongoDb})`);
+} else {
+  log.warn('MONGODB_URI not set: games run, but nothing is recorded and /stats is disabled');
+}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 ctx.client = client;
-ctx.stats = new StatsRepo(db);
-ctx.config = config;
 
 client.once(Events.ClientReady, (c) => {
   log.info(`Logged in as ${c.user.tag} · ${ANSWERS.length} answers · ${ALLOWED.size} allowed guesses`);
-  c.user.setActivity('/help · CoWordle');
+  c.user.setActivity('/cowordle');
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
   try {
-    if (interaction.isChatInputCommand()) {
-      const cmd = commandMap.get(interaction.commandName);
-      if (!cmd) return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
-      await cmd.execute(interaction);
-    } else if (interaction.isButton()) {
-      const handled = await dispatchButton(interaction);
-      if (!handled) await interaction.reply({ content: 'This button is no longer active.', flags: MessageFlags.Ephemeral });
-    }
+    const cmd = commandMap.get(interaction.commandName);
+    if (!cmd) return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
+    await cmd.execute(interaction);
   } catch (err) {
-    log.error(`interaction ${interaction.commandName ?? interaction.customId} failed:`, err);
+    log.error(`interaction ${interaction.commandName} failed:`, err);
     const payload = { content: 'Something went wrong. Please try again.', flags: MessageFlags.Ephemeral };
     try {
       if (interaction.deferred && !interaction.replied) await interaction.editReply(payload);
@@ -47,29 +49,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-client.on(Events.ThreadDelete, (thread) => {
-  const match = getMatchByThread(thread.id);
-  if (match) endMatch(match, 'thread_deleted').catch((err) => log.error('endMatch failed:', err));
-});
-
 client.on(Events.Error, (err) => log.error('client error:', err));
 process.on('unhandledRejection', (err) => log.error('unhandledRejection:', err));
 
-// Optional keep-alive HTTP server (Render and similar hosts expect a web
-// service to bind PORT; an uptime monitor can ping / to prevent spin-down).
-if (config.port) {
-  createServer((req, res) => {
-    const ok = client.isReady();
-    res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok, bot: client.user?.tag ?? null, uptime: Math.floor(process.uptime()) }));
-  }).listen(config.port, () => log.info(`health server on :${config.port}`));
-}
+// The Activity itself: static page + token exchange over HTTP, game over WebSocket.
+const server = createHttpServer({ config, isReady: () => client.isReady() });
+attachWebSocket(server, config);
+server.listen(config.port, () => log.info(`activity server on :${config.port}${config.allowDevLogin ? ' (dev login enabled)' : ''}`));
 
 async function shutdown(signal) {
   log.info(`${signal} received, shutting down`);
   try {
+    destroyAllRooms();
+    server.close();
     await client.destroy();
-    await mongo.close();
+    if (mongo) await mongo.close();
   } finally {
     process.exit(0);
   }

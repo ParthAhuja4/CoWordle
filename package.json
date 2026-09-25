@@ -1,21 +1,30 @@
 {
   "name": "co-wordle",
-  "version": "1.0.0",
-  "description": "CoWordle / Victordle style multiplayer Wordle for Discord: Turn-by-Turn and Duel modes, lobbies, challenges, rematches and stats.",
+  "version": "2.0.0",
+  "description": "CoWordle as a Discord Activity: multiplayer Wordle (Duel and Turn-by-Turn) that opens inside Discord with /cowordle, with rematches and MongoDB stats.",
   "type": "module",
   "private": true,
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
+    "postinstall": "npm run build",
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "dev": "npm run build && node --watch --watch-path=src src/index.js",
+    "build": "esbuild web/main.js --bundle --minify --format=iife --target=es2020 --outfile=public/app.js --log-level=warning",
+    "build:watch": "esbuild web/main.js --bundle --format=iife --target=es2020 --outfile=public/app.js --watch",
     "register": "node scripts/register-commands.js",
     "words": "bash scripts/fetch-words.sh",
-    "test": "node --test"
+    "test": "npm run build && node --test"
   },
   "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
     "discord.js": "^14.27.0",
-    "mongodb": "^7.6.0"
+    "esbuild": "^0.28.2",
+    "mongodb": "^7.6.0",
+    "ws": "^8.21.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

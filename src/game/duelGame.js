@@ -96,12 +96,23 @@ export function applyDuelTimeout(round, userId) {
   return resolveDuel(round);
 }
 
-/** Player leaves the round. @returns result string or null. */
+/**
+ * Player leaves the round. If exactly one player remains, they win outright
+ * (last one standing); otherwise the round resolves normally.
+ * @returns result string or null.
+ */
 export function forfeitDuel(round, userId) {
   if (round.status !== 'playing') return null;
   const b = round.boards[userId];
   if (!b || boardDone(b)) return null;
   b.forfeited = true;
   b.version++;
+  const alive = Object.keys(round.boards).filter((id) => !round.boards[id].forfeited);
+  if (alive.length === 1) {
+    round.version++;
+    round.status = 'won';
+    round.winnerIds = alive;
+    return 'won';
+  }
   return resolveDuel(round);
 }

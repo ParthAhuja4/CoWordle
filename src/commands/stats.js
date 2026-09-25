@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, InteractionContextType, EmbedBuilder } from 'discord.js';
-import { ctx } from '../match/context.js';
-import { NO_PINGS } from '../util/discord.js';
+import { ctx } from '../util/context.js';
+import { NO_PINGS, ephemeral } from '../util/discord.js';
 
 export const data = new SlashCommandBuilder()
   .setName('stats')
@@ -11,6 +11,7 @@ export const data = new SlashCommandBuilder()
 const pct = (n, d) => (d ? `${Math.round((100 * n) / d)}%` : '—');
 
 export async function execute(interaction) {
+  if (!ctx.stats) return interaction.reply(ephemeral('Stats are not enabled on this bot (no database configured).'));
   await interaction.deferReply();
   const target = interaction.options.getUser('user') ?? interaction.user;
   const member = interaction.options.getMember('user');

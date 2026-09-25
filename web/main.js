@@ -1,0 +1,703 @@
+/**
+ * CoWordle Activity front end. Bundled by esbuild into public/app.js.
+ *
+ * Boot: Discord Embedded App SDK → authorize → POST /api/token → authenticate
+ *       → open WebSocket to the room for this Activity instance.
+ * Then: every server snapshot re-renders the screen for the current phase.
+ */
+import { DiscordSDK } from '@discord/embedded-app-sdk';
+
+const cfg = window.COWORDLE ?? {};
+const $ = (sel) => document.querySelector(sel);
+const params = new URLSearchParams(location.search);
+// Inside Discord the page is served through the Activity proxy with a root ("/")
+// URL mapping, so relative paths reach our server unchanged. Same locally.
+const BASE = '';
+const WORD_LEN = 5;
+const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+const state = {
+  session: null,
+  instanceId: null,
+  channelId: null,
+  me: null,
+  snap: null,
+  typed: '',
+  pending: false,
+  offset: 0, // serverNow - clientNow
+  ws: null,
+  retry: 0,
+  revealed: new Map(), // boardKey → rows already shown (for flip animation)
+  shakeRow: false,
+};
+
+/* ------------------------------------------------------------------ boot */
+
+async function boot() {
+  try {
+    if (cfg.devLogin && params.has('dev')) await devBoot();
+    else await discordBoot();
+    connect();
+  } catch (err) {
+    console.error(err);
+    showLoadingError(err?.message ?? String(err));
+  }
+}
+
+async function discordBoot() {
+  if (!params.get('frame_id')) {
+    throw new Error('Open CoWordle from inside Discord: type /cowordle in a channel.');
+  }
+  const sdk = new DiscordSDK(cfg.clientId);
+  setLoading('Connecting to Discord…');
+  await sdk.ready();
+  setLoading('Signing you in…');
+  const { code } = await sdk.commands.authorize({
+    client_id: cfg.clientId,
+    response_type: 'code',
+    state: '',
+    prompt: 'none',
+    scope: ['identify', 'guilds.members.read'],
+  });
+  const res = await fetch(`${BASE}/api/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, guildId: sdk.guildId }),
+  });
+  if (!res.ok) throw new Error(`Sign-in failed (${res.status}). Check DISCORD_CLIENT_SECRET on the server.`);
+  const { access_token, session, user } = await res.json();
+  await sdk.commands.authenticate({ access_token });
+  state.session = session;
+  state.me = user;
+  state.instanceId = sdk.instanceId;
+  state.channelId = sdk.channelId;
+}
+
+async function devBoot() {
+  setLoading('Dev login…');
+  const res = await fetch(`${BASE}/api/dev-login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: params.get('dev') }),
+  });
+  if (!res.ok) throw new Error('Dev login is disabled on this server.');
+  const { session, user } = await res.json();
+  state.session = session;
+  state.me = user;
+  state.instanceId = params.get('instance') || 'dev';
+  state.channelId = null;
+}
+
+function setLoading(text) {
+  $('#loading-text').textContent = text;
+}
+
+function showLoadingError(text) {
+  show('loading');
+  $('#loading-text').textContent = 'Could not start CoWordle.';
+  const el = $('#loading-error');
+  el.textContent = text;
+  el.hidden = false;
+}
+
+/* --------------------------------------------------------------- network */
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const q = new URLSearchParams({ s: state.session, i: state.instanceId });
+  if (state.channelId) q.set('c', state.channelId);
+  const ws = new WebSocket(`${proto}://${location.host}${BASE}/ws?${q}`);
+  state.ws = ws;
+  setLoading('Joining the room…');
+
+  ws.onopen = () => {
+    state.retry = 0;
+  };
+  ws.onmessage = (ev) => {
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    handle(msg);
+  };
+  ws.onclose = (ev) => {
+    if (ev.code === 1000 && ev.reason === 'room closed') {
+      showLoadingError('This room was closed. Launch /cowordle again.');
+      return;
+    }
+    if (ev.code === 1008 || ev.code === 4401) {
+      showLoadingError('Your session expired. Launch /cowordle again.');
+      return;
+    }
+    const delay = Math.min(8000, 500 * 2 ** state.retry++);
+    if (state.snap) toast('Reconnecting…', true);
+    setTimeout(connect, delay);
+  };
+  ws.onerror = () => {};
+}
+
+function send(msg) {
+  if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(msg));
+}
+
+function handle(msg) {
+  switch (msg.t) {
+    case 'state':
+      state.offset = msg.now - Date.now();
+      if (state.snap?.phase !== msg.phase || state.snap?.roundNumber !== msg.roundNumber) {
+        state.typed = '';
+        state.pending = false;
+      }
+      state.snap = msg;
+      render();
+      break;
+    case 'guess':
+      state.pending = false;
+      if (msg.ok) state.typed = '';
+      else {
+        state.shakeRow = true;
+        toast(msg.message ?? 'Try again');
+      }
+      render();
+      break;
+    case 'event':
+      if (msg.kind !== 'join') toast(msg.text, msg.kind === 'leave' || msg.kind === 'info');
+      break;
+    case 'error':
+      toast(msg.text);
+      break;
+    default:
+      break;
+  }
+}
+
+/* ---------------------------------------------------------------- render */
+
+function show(name) {
+  for (const s of ['loading', 'lobby', 'game']) $(`#screen-${s}`).hidden = s !== name;
+}
+
+function render() {
+  const snap = state.snap;
+  if (!snap) return;
+  if (snap.phase === 'lobby') renderLobby(snap);
+  else renderGame(snap);
+}
+
+function member(snap, id) {
+  return snap.members.find((m) => m.id === id) ?? { id, name: 'Player', avatar: null };
+}
+
+function avatarEl(m, cls = 'avatar') {
+  const el = document.createElement('div');
+  el.className = cls;
+  if (m.avatar) {
+    const img = document.createElement('img');
+    img.src = m.avatar;
+    img.alt = '';
+    img.onerror = () => {
+      img.remove();
+      el.textContent = initials(m.name);
+    };
+    el.appendChild(img);
+  } else {
+    el.textContent = initials(m.name);
+  }
+  return el;
+}
+
+function initials(name) {
+  return String(name ?? '?').trim().slice(0, 1).toUpperCase() || '?';
+}
+
+function scoreText(snap) {
+  const ids = Object.keys(snap.score).filter((k) => k !== 'draws');
+  if (!ids.length) return '';
+  const parts = ids.map((id) => `${member(snap, id).name} ${snap.score[id]}`);
+  if (snap.score.draws) parts.push(`draws ${snap.score.draws}`);
+  return parts.join(' · ');
+}
+
+/* ------------------------------------------------------------------ lobby */
+
+const MODE_DESC = {
+  duel: 'Same word, your own board, all at once. You only see your rivals’ colours, never their letters. Fewest guesses wins.',
+  turn: 'One shared board. Take turns guessing; every guess helps everyone. First to solve wins.',
+};
+
+function renderLobby(snap) {
+  show('lobby');
+  const isHost = snap.hostId === snap.me;
+  const list = $('#lobby-players');
+  list.replaceChildren(
+    ...snap.members.map((m) => {
+      const li = document.createElement('li');
+      li.className = 'member';
+      li.appendChild(avatarEl(m));
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = m.name + (m.id === snap.me ? ' (you)' : '');
+      li.appendChild(name);
+      if (m.id === snap.hostId) {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = '👑 host';
+        li.appendChild(tag);
+      }
+      return li;
+    }),
+  );
+  $('#lobby-count').textContent = `${snap.members.length}/${snap.settings.maxPlayers}`;
+
+  const modeSeg = $('#mode-picker');
+  modeSeg.setAttribute('aria-disabled', String(!isHost));
+  for (const b of modeSeg.querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.mode === snap.settings.mode);
+    b.disabled = !isHost;
+  }
+  $('#mode-desc').textContent = MODE_DESC[snap.settings.mode] + ` ${snap.settings.turnSeconds}s per ${snap.settings.mode === 'turn' ? 'turn' : 'guess'}.`;
+  const turnsRow = $('#turns-row');
+  turnsRow.hidden = snap.settings.mode !== 'turn';
+  const turnsSeg = $('#turns-picker');
+  turnsSeg.setAttribute('aria-disabled', String(!isHost));
+  for (const b of turnsSeg.querySelectorAll('button')) {
+    b.classList.toggle('on', Number(b.dataset.turns) === snap.settings.turnsEach);
+    b.disabled = !isHost;
+  }
+
+  const enough = snap.members.length >= snap.settings.minPlayers;
+  const startBtn = $('#start-btn');
+  const wait = $('#lobby-wait');
+  startBtn.hidden = !isHost;
+  startBtn.disabled = !enough;
+  startBtn.textContent = enough ? (snap.roundsPlayed ? 'Play again' : 'Start game') : `Waiting for players (${snap.members.length}/${snap.settings.minPlayers})`;
+  wait.hidden = isHost;
+  wait.textContent = enough ? `Waiting for ${member(snap, snap.hostId).name} to start…` : 'Waiting for more players…';
+
+  const score = $('#lobby-score');
+  const st = scoreText(snap);
+  score.hidden = !st;
+  score.textContent = st;
+}
+
+$('#mode-picker').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]');
+  if (b && !b.disabled) send({ t: 'settings', mode: b.dataset.mode });
+});
+$('#turns-picker').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-turns]');
+  if (b && !b.disabled) send({ t: 'settings', turnsEach: Number(b.dataset.turns) });
+});
+$('#start-btn').addEventListener('click', () => send({ t: 'start' }));
+
+/* ------------------------------------------------------------------- game */
+
+function myRole(snap) {
+  return member(snap, snap.me).role ?? (snap.participants.includes(snap.me) ? 'player' : 'spectator');
+}
+
+function canGuess(snap) {
+  if (snap.phase !== 'playing' || !snap.round) return false;
+  if (!snap.participants.includes(snap.me) || myRole(snap) === 'left') return false;
+  if (snap.round.kind === 'turn') return snap.round.turnUserId === snap.me;
+  const b = snap.round.boards[snap.me];
+  return !!b && !b.done;
+}
+
+function myDeadline(snap) {
+  if (!snap.round || snap.phase !== 'playing') return null;
+  if (snap.round.kind === 'turn') return snap.round.deadline;
+  return snap.round.boards[snap.me]?.deadline ?? null;
+}
+
+function renderGame(snap) {
+  show('game');
+  const round = snap.round;
+  const playing = snap.phase === 'playing';
+
+  // Score chips
+  const chips = $('#score-chips');
+  chips.replaceChildren(
+    ...snap.participants.map((id) => {
+      const m = member(snap, id);
+      const c = document.createElement('div');
+      c.className = 'chip' + (id === snap.me ? ' me' : '') + (m.role === 'left' ? ' left' : '');
+      c.appendChild(avatarEl(m));
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = m.name;
+      const s = document.createElement('span');
+      s.className = 's';
+      s.textContent = snap.score[id] ?? 0;
+      c.append(n, s);
+      return c;
+    }),
+  );
+  $('#round-label').textContent = `${round?.kind === 'turn' ? 'Turn-by-Turn' : 'Duel'} · Round ${snap.roundNumber}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
+
+  // Status line
+  $('#status').innerHTML = statusHtml(snap);
+
+  // Boards
+  const boards = $('#boards');
+  boards.replaceChildren(round.kind === 'turn' ? renderTurnBoard(snap) : renderDuelBoards(snap));
+
+  // Overlay
+  const overlay = $('#overlay');
+  if (snap.phase === 'roundOver') {
+    overlay.hidden = false;
+    overlay.replaceChildren(resultCard(snap));
+  } else {
+    overlay.hidden = true;
+    overlay.replaceChildren();
+  }
+
+  // Keyboard + forfeit
+  renderKeyboard(snap);
+  const ff = $('#forfeit-btn');
+  ff.hidden = !(playing && snap.participants.includes(snap.me) && myRole(snap) === 'player');
+
+  state.shakeRow = false;
+  tickTimer();
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function statusHtml(snap) {
+  const r = snap.round;
+  const meIn = snap.participants.includes(snap.me);
+  if (snap.phase !== 'playing') return '';
+  if (!meIn) return 'You’re watching this round — you join the next one.';
+  if (myRole(snap) === 'left') return 'You forfeited this round.';
+  if (r.kind === 'turn') {
+    if (r.turnUserId === snap.me) return `<b>Your turn</b> · ${r.maxRows - r.rows.length} row${r.maxRows - r.rows.length === 1 ? '' : 's'} left`;
+    return `Waiting for <b>${esc(member(snap, r.turnUserId).name)}</b>…`;
+  }
+  const b = r.boards[snap.me];
+  if (b.solvedAt !== null) return `<b>Solved in ${b.solvedAt}!</b> Waiting for the others…`;
+  if (b.out) return 'Out of guesses. Waiting for the others…';
+  if (r.bestSolve !== null) {
+    const left = r.bestSolve - b.rows.length;
+    return left > 0 ? `Someone solved it in <b>${r.bestSolve}</b> — ${left} guess${left === 1 ? '' : 'es'} to tie or beat it` : 'Someone solved it first.';
+  }
+  return `Guess ${b.rows.length + 1} of ${r.maxRows}`;
+}
+
+function tileRow(row, { typed = '', flip = false, timedLabel = '⏱' } = {}) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  for (let i = 0; i < WORD_LEN; i++) {
+    const t = document.createElement('div');
+    let cls = 'tile';
+    if (row?.timedOut) {
+      cls += ' timed';
+      t.textContent = i === 2 ? timedLabel : '';
+    } else if (row?.pattern) {
+      cls += ` ${row.pattern[i]}`;
+      if (flip) {
+        cls += ' flip';
+        t.style.animationDelay = `${i * 90}ms`;
+      }
+      t.textContent = row.word ? row.word[i] : '';
+    } else if (typed[i]) {
+      cls += ' typed';
+      t.textContent = typed[i];
+    }
+    t.className = cls;
+    el.appendChild(t);
+  }
+  return el;
+}
+
+/** Rows that appeared since the last render get the flip animation. */
+function newRowsFrom(key, count) {
+  const seen = state.revealed.get(key) ?? 0;
+  state.revealed.set(key, count);
+  return seen;
+}
+
+function renderDuelBoards(snap) {
+  const r = snap.round;
+  const wrap = document.createElement('div');
+  wrap.className = 'mine-wrap';
+
+  const mine = r.boards[snap.me];
+  if (mine) {
+    const board = document.createElement('div');
+    board.className = 'board';
+    const key = `duel:${snap.roundNumber}:me`;
+    const seen = newRowsFrom(key, mine.rows.length);
+    const typing = canGuess(snap) && snap.phase === 'playing';
+    for (let i = 0; i < r.maxRows; i++) {
+      const row = mine.rows[i];
+      const el = tileRow(row, { typed: typing && i === mine.rows.length ? state.typed : '', flip: !!row && i >= seen });
+      if (typing && i === mine.rows.length && state.shakeRow) el.classList.add('shake');
+      board.appendChild(el);
+    }
+    wrap.appendChild(board);
+  } else {
+    const lbl = document.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = 'Spectating';
+    wrap.appendChild(lbl);
+  }
+
+  const others = document.createElement('div');
+  others.className = 'others';
+  for (const [id, b] of Object.entries(r.boards)) {
+    if (id === snap.me) continue;
+    others.appendChild(miniBoard(snap, id, b));
+  }
+  const container = document.createElement('div');
+  container.style.display = 'contents';
+  container.append(wrap, others);
+  return container;
+}
+
+function miniBoard(snap, id, b) {
+  const m = member(snap, id);
+  const el = document.createElement('div');
+  el.className = 'other' + (b.solvedAt !== null ? ' done' : '') + (b.forfeited || m.role === 'away' ? ' left' : '');
+  const grid = document.createElement('div');
+  grid.className = 'mini';
+  for (let i = 0; i < snap.round.maxRows; i++) {
+    const row = b.rows[i];
+    const mr = document.createElement('div');
+    mr.className = 'mrow';
+    for (let j = 0; j < WORD_LEN; j++) {
+      const t = document.createElement('div');
+      t.className = 'mtile' + (row?.timedOut ? ' timed' : row?.pattern ? ` ${row.pattern[j]}` : '');
+      mr.appendChild(t);
+    }
+    grid.appendChild(mr);
+  }
+  const name = document.createElement('div');
+  name.className = 'oname';
+  name.textContent = m.name;
+  const stat = document.createElement('div');
+  stat.className = 'ostat';
+  stat.textContent = b.forfeited ? 'left' : m.role === 'away' ? 'away' : b.solvedAt !== null ? `solved in ${b.solvedAt}` : b.out ? 'out' : `${b.rows.length}/${snap.round.maxRows}`;
+  const text = document.createElement('div');
+  text.className = 'other-text';
+  text.append(name, stat);
+  el.append(grid, text);
+  return el;
+}
+
+function renderTurnBoard(snap) {
+  const r = snap.round;
+  const board = document.createElement('div');
+  board.className = 'board';
+  const key = `turn:${snap.roundNumber}`;
+  const seen = newRowsFrom(key, r.rows.length);
+  const typing = canGuess(snap);
+  for (let i = 0; i < r.maxRows; i++) {
+    const row = r.rows[i];
+    const isNext = i === r.rows.length && snap.phase === 'playing';
+    const el = tileRow(row, { typed: typing && isNext ? state.typed : '', flip: !!row && i >= seen });
+    el.className = 'turn-row' + (isNext ? ' active' : '');
+    if (typing && isNext && state.shakeRow) el.classList.add('shake');
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = row ? member(snap, row.userId).name : isNext ? member(snap, r.turnUserId).name : '';
+    el.appendChild(who);
+    board.appendChild(el);
+  }
+  return board;
+}
+
+function resultCard(snap) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const res = snap.result ?? { winnerIds: [], result: 'draw', secret: snap.round?.secret ?? '' };
+  const h = document.createElement('h3');
+  const names = res.winnerIds.map((id) => member(snap, id).name);
+  const meWon = res.winnerIds.includes(snap.me);
+  if (res.winnerIds.length === 1) h.textContent = meWon ? '🏆 You win!' : `🏆 ${names[0]} wins`;
+  else if (res.winnerIds.length > 1) h.textContent = meWon ? '🤝 You tied!' : `🤝 Tie: ${names.join(' & ')}`;
+  else h.textContent = '😶 Nobody got it';
+  card.appendChild(h);
+
+  const word = document.createElement('div');
+  word.className = 'word';
+  for (const ch of res.secret) {
+    const s = document.createElement('span');
+    s.textContent = ch;
+    word.appendChild(s);
+  }
+  card.appendChild(word);
+
+  const sub = document.createElement('p');
+  sub.className = 'sub';
+  sub.textContent = scoreText(snap);
+  card.appendChild(sub);
+
+  const rm = snap.rematch ?? { votes: [], needed: [], deadline: null };
+  const iVote = snap.participants.includes(snap.me) && rm.needed.includes(snap.me);
+  const btn = document.createElement('button');
+  btn.className = 'primary';
+  if (iVote) {
+    const voted = rm.votes.includes(snap.me);
+    btn.textContent = voted ? `Waiting for others (${rm.votes.length}/${rm.needed.length})` : `Play again (${rm.votes.length}/${rm.needed.length})`;
+    btn.disabled = voted;
+    btn.onclick = () => send({ t: 'rematch' });
+  } else {
+    btn.textContent = 'You’ll join the next round';
+    btn.disabled = true;
+  }
+  card.appendChild(btn);
+
+  const votes = document.createElement('div');
+  votes.className = 'votes';
+  for (const id of rm.needed) {
+    const v = document.createElement('span');
+    v.className = 'v' + (rm.votes.includes(id) ? ' yes' : '');
+    v.textContent = `${rm.votes.includes(id) ? '✓ ' : ''}${member(snap, id).name}`;
+    votes.appendChild(v);
+  }
+  card.appendChild(votes);
+
+  const cd = document.createElement('p');
+  cd.className = 'sub';
+  cd.style.marginTop = '10px';
+  cd.dataset.deadline = rm.deadline ?? '';
+  cd.id = 'vote-countdown';
+  card.appendChild(cd);
+  return card;
+}
+
+function renderKeyboard(snap) {
+  const kb = $('#keyboard');
+  const active = canGuess(snap);
+  kb.classList.toggle('off', !active);
+  if (kb.dataset.built !== '1') {
+    kb.dataset.built = '1';
+    kb.replaceChildren(
+      ...KEY_ROWS.map((row, i) => {
+        const r = document.createElement('div');
+        r.className = 'krow';
+        if (i === 2) r.appendChild(keyBtn('enter', 'Enter', true));
+        for (const ch of row) r.appendChild(keyBtn(ch, ch));
+        if (i === 2) r.appendChild(keyBtn('backspace', '⌫', true));
+        return r;
+      }),
+    );
+  }
+  for (const b of kb.querySelectorAll('.key[data-key]')) {
+    const k = b.dataset.key;
+    if (k.length !== 1) continue;
+    b.className = 'key' + (snap.keys[k] ? ` ${snap.keys[k]}` : '');
+  }
+}
+
+function keyBtn(key, label, wide = false) {
+  const b = document.createElement('button');
+  b.className = 'key' + (wide ? ' wide' : '');
+  b.dataset.key = key;
+  b.textContent = label;
+  b.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    onKey(key);
+  });
+  return b;
+}
+
+function onKey(key) {
+  const snap = state.snap;
+  if (!snap || !canGuess(snap) || state.pending) return;
+  if (key === 'enter') {
+    if (state.typed.length !== WORD_LEN) {
+      state.shakeRow = true;
+      toast('Not enough letters');
+      render();
+      return;
+    }
+    state.pending = true;
+    send({ t: 'guess', word: state.typed });
+    return;
+  }
+  if (key === 'backspace') {
+    if (state.typed) {
+      state.typed = state.typed.slice(0, -1);
+      render();
+    }
+    return;
+  }
+  if (/^[a-z]$/.test(key) && state.typed.length < WORD_LEN) {
+    state.typed += key;
+    render();
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if ($('#screen-game').hidden || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'enter' || k === 'backspace' || /^[a-z]$/.test(k)) {
+    e.preventDefault();
+    onKey(k);
+  }
+});
+
+// Two taps instead of confirm(): dialogs are blocked inside Discord's sandboxed iframe.
+let forfeitArmed = null;
+$('#forfeit-btn').addEventListener('click', (e) => {
+  const btn = e.currentTarget;
+  if (forfeitArmed) {
+    clearTimeout(forfeitArmed);
+    forfeitArmed = null;
+    btn.textContent = 'Forfeit round';
+    send({ t: 'forfeit' });
+    return;
+  }
+  btn.textContent = 'Tap again to forfeit';
+  forfeitArmed = setTimeout(() => {
+    forfeitArmed = null;
+    btn.textContent = 'Forfeit round';
+  }, 3000);
+});
+
+/* ----------------------------------------------------------------- timer */
+
+function tickTimer() {
+  const snap = state.snap;
+  const fill = $('#timer-fill');
+  if (!snap || snap.phase !== 'playing') {
+    fill.style.width = '0%';
+  } else {
+    const r = snap.round;
+    const total = snap.settings.turnSeconds * 1000;
+    const dl = r.kind === 'turn' ? r.deadline : (r.boards[snap.me]?.deadline ?? null);
+    if (dl) {
+      const left = Math.max(0, dl - (Date.now() + state.offset));
+      fill.style.width = `${(100 * left) / total}%`;
+      fill.classList.toggle('low', left < 8000);
+    } else {
+      fill.style.width = '0%';
+    }
+  }
+  const cd = document.getElementById('vote-countdown');
+  if (cd && cd.dataset.deadline) {
+    const left = Math.max(0, Number(cd.dataset.deadline) - (Date.now() + state.offset));
+    cd.textContent = `Starts when everyone taps Play again · ${Math.ceil(left / 1000)}s`;
+  }
+}
+setInterval(tickTimer, 250);
+setInterval(() => send({ t: 'ping' }), 25_000);
+
+/* ----------------------------------------------------------------- toasts */
+
+function toast(text, quiet = false) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (quiet ? ' quiet' : '');
+  el.textContent = text;
+  const box = $('#toasts');
+  box.appendChild(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), 2300);
+}
+
+boot();

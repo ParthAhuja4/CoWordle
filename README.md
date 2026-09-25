@@ -1,96 +1,93 @@
 # CoWordle for Discord
 
-A Discord bot that brings CoWordle / Victordle-style multiplayer Wordle to your server: two game modes, 2–5 players per match, open lobbies for random opponents, direct challenges, back-to-back rounds with a series score, rematches, and a permanent leaderboard stored in MongoDB.
+CoWordle as a **Discord Activity**: type `/cowordle` in any channel and a real Wordle board opens inside Discord, the same way the official `/wordle` does. Everyone who opens it from that channel lands in the same room and plays against each other with live tiles, an on-screen keyboard and timers. No threads, no text commands during play.
 
-## Features
+## How it plays
 
-- **Turn-by-Turn** — everyone shares one board and one hidden word, taking turns (30 s per turn, 2 turns each by default). First to solve wins; full board is a draw.
-- **Duel** — everyone gets their own board with the same word and races (30 s per guess, 6 rows). Opponents see your colours, never your letters. Fewest guesses wins; equal = tie; nobody = draw. A player who solves first leaves the others a "last chance" to tie or beat it.
-- **2–5 players** in either mode.
-- **Lobbies** (`/play`) act as the random-opponent queue; **challenges** (`/challenge`) invite specific people.
-- **Series**: rounds continue with a Rematch vote and a running score; each round is a new word.
-- **Stats**: wins, losses, draws, streaks, head-to-head, and `/leaderboard` per server.
-- Big dictionary: ~14.8k possible answers, ~20k accepted guesses.
+- **Duel** (default): same hidden word, your own board, everyone at once. 30 s per guess, 6 rows. You only ever see your rivals' **colours**, never their letters, not even after the round. Fewest guesses wins; same count is a tie; nobody solving is a draw. Once someone solves it, anyone who has used fewer rows gets a last chance to tie or beat it.
+- **Turn-by-Turn**: one shared board, players take turns (30 s each, 1–3 turns per player). Every guess helps everyone. First to solve wins; a full board is a draw.
+- **2–5 players**, round after round with a running score. After a round everyone taps **Play again**; people who joined mid-round come in on the next one. Timing out burns a row. Forfeiting (two taps) removes you from the round; if you are the last one standing, you win.
+- **Stats**: `/stats [user]` and `/leaderboard [sort]` per server, stored in MongoDB. `/help` explains the rules in Discord.
 
-## Commands
+## How it is built
 
-| Command | What it does |
-|---|---|
-| `/play mode:<turn\|duel> [players:2-5] [turns:1-3]` | Open a lobby, or join an existing open lobby of that mode. Starts when full or when the host presses **Start now**. |
-| `/challenge user1:@x [user2..user4] mode:<…> [turns]` | Invite specific players. Each accepts or declines; starts when everyone answered or when the host presses **Start now**. |
-| `/guess word:<word>` | Make a guess. Only you see the reply (so Duel letters stay private). Works anywhere in the server. |
-| `/board` | Your private view of the current round. |
-| `/forfeit` | Concede the round and leave the match. |
-| `/cancel` | Leave a lobby (host closes it) or withdraw your challenge. |
-| `/stats [user]` | Record, win rate, streaks, head-to-head vs you. |
-| `/leaderboard [sort]` | Top 10 by wins, win rate (min 5 games) or streak. |
-| `/help` | Rules. |
+One Node process does three jobs:
 
-Each match runs in its own public thread under the channel where it started. Board messages are edited in place; countdowns use Discord's relative timestamps.
+1. **Discord bot** (discord.js): handles `/stats`, `/leaderboard`, `/help`. The `/cowordle` Entry Point command is launched by Discord itself, so no bot code runs for it.
+2. **Activity web server** (`src/http.js`): serves the page in `public/`, exchanges the Activity's OAuth2 code for the player's identity (`POST /api/token`), and answers `/health`.
+3. **Game server** (`src/activity/`): one `Room` per Activity instance, driven over WebSocket (`/ws`). It reuses the pure game engines in `src/game/` and pushes each player a personalised snapshot, so opponents' letters never leave the server.
 
-Every board shows a QWERTY keyboard: letters found in the word carry a 🟩 or 🟨 tile, letters proven absent are ~~struck through~~ (greyed out), untried letters stay plain.
-
-The UI is designed for phones as well as desktop: board rows are short enough never to wrap, long names are truncated inside boards, Duel boards sit side by side for two players and stack full-width for three or more, buttons use short labels with emoji, and every board carries a text legend for the tile colours.
+The front end (`web/main.js`, bundled by esbuild into `public/app.js`) is plain JavaScript on top of `@discord/embedded-app-sdk`.
 
 ## Setup
 
 ### 1. Discord application
 
-1. Go to <https://discord.com/developers/applications> → **New Application**.
-2. **Bot** tab → **Reset Token** → copy it (this is `DISCORD_TOKEN`). No privileged intents are needed.
+1. <https://discord.com/developers/applications> → **New Application** (or open the existing one).
+2. **Bot** → **Reset Token** → copy it (`DISCORD_TOKEN`). No privileged intents needed.
 3. **General Information** → copy the **Application ID** (`CLIENT_ID`).
-4. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`; bot permissions: *View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Manage Threads, Embed Links, Read Message History*. Open the generated URL and invite the bot to your server.
+4. **OAuth2** → copy the **Client Secret** (`DISCORD_CLIENT_SECRET`). Under **Redirects** add `https://127.0.0.1` (the SDK never uses it, but Discord requires one to exist).
+5. **Activities → Getting Started** → **Enable Activities**.
+6. **Activities → URL Mappings**: prefix `/` → target your public host **without** `https://`, e.g. `cowordle.onrender.com`.
+7. **Activities → Settings**: tick the platforms you want (web, iOS, Android).
+8. **Installation**: enable Guild Install (scopes `applications.commands`, `bot`) and, if you like, User Install. Use the install link to add the app to your server.
 
-### 2. MongoDB
+### 2. MongoDB (optional but recommended)
 
-Create a free cluster at <https://www.mongodb.com/atlas> (M0), add a database user, allow access from anywhere (`0.0.0.0/0`, needed for cloud hosts), and copy the connection string (`MONGODB_URI`).
+Free M0 cluster at <https://www.mongodb.com/atlas>: create a database user, allow access from `0.0.0.0/0`, copy the connection string (`MONGODB_URI`). Without it everything still works but nothing is recorded and `/stats` is disabled.
 
-### 3. Run locally
+### 3. Deploy on Render (free tier)
+
+`render.yaml` describes the service. Or manually: **Web Service**, build command `npm install && npm run words && npm run build`, start command `npm start`, health check `/health`, environment variables from `.env.example`. Render sets `PORT` itself and gives you HTTPS, which Activities require. Put the Render host name in the URL mapping from step 1.6.
+
+Render's free tier sleeps idle services, so point a free uptime monitor (e.g. UptimeRobot every 5 minutes) at `https://<your-service>/health`. Rooms live in memory: a restart ends games in progress, but finished rounds are already in MongoDB.
+
+### 4. Register the commands
+
+Once, from your machine with the same `.env`:
 
 ```bash
 npm install
-npm run words          # downloads data/answers.txt and data/allowed.txt
-cp .env.example .env   # fill in DISCORD_TOKEN, CLIENT_ID, MONGODB_URI (+ GUILD_ID for instant dev commands)
-npm run register       # registers slash commands
-npm run dev            # or: npm start
+npm run register
 ```
 
-`GUILD_ID` set → commands appear instantly in that server only. Leave it empty for global commands (up to an hour to propagate). If you registered both, run `npm run register -- --clear` at the scope you want to drop to remove duplicates.
+This creates `/cowordle` (global, replaces Discord's default "Launch" entry point) and `/stats`, `/leaderboard`, `/help`. With `GUILD_ID` set the three chat commands go to that server only, instantly; without it they are global and can take up to an hour to appear.
 
-### 4. Deploy on Render (free tier)
+If you still have old commands (`/play`, `/guess`, …) registered from the previous version at the other scope, run `npm run register -- --clear` at that scope once.
 
-Render's free tier has no persistent disk and sleeps idle web services, so:
+### 5. Play
 
-- Stats live in MongoDB Atlas (free), so they survive restarts and redeploys.
-- Deploy as a **Web Service** (not a background worker). Build command `npm install && npm run words`, start command `npm start`. Add the environment variables from `.env.example`; Render sets `PORT` automatically and the bot serves `GET /` and `/health` on it.
-- Point a free uptime monitor (e.g. UptimeRobot, every 5 minutes) at the service URL so it never spins down.
-- Run `npm run register` once from your machine (or as a one-off) to register the commands.
+In any channel of a server that has the app: type `/cowordle` and press Enter, or open it from the **App Launcher** (the rocket / apps button). Friends join by clicking the Activity in the channel.
 
-In-progress games live in memory and are lost on a restart; finished rounds are already saved.
-
-## Development
+## Local development
 
 ```bash
-npm test                                          # unit tests (scoring, engines, word lists)
-MONGODB_TEST_URI=mongodb://127.0.0.1:27017 npm test  # also runs the stats integration test
+cp .env.example .env     # fill in DISCORD_TOKEN, CLIENT_ID, DISCORD_CLIENT_SECRET (+ MONGODB_URI)
+npm install
+npm run words            # downloads data/answers.txt and data/allowed.txt
+npm run dev              # builds the front end, starts the bot + web server on :3000
 ```
 
-Layout:
+**Without Discord**: set `ALLOW_DEV_LOGIN=1` in `.env` and open two browser windows at `http://localhost:3000/?dev=Alice&instance=room1` and `http://localhost:3000/?dev=Bob&instance=room1`. Never enable this on a public host.
 
-- `src/game/` — pure game logic (`scoring.js`, `turnGame.js`, `duelGame.js`, `words.js`), no Discord.
-- `src/match/` — in-memory matches, lobbies, challenges, versioned timers, and `lifecycle.js` (threads, boards, round/match end, stats).
-- `src/render/` — embeds and board layouts.
-- `src/commands/`, `src/buttons/` — slash command and button handlers.
+**Inside Discord**: Activities must be served over HTTPS through Discord's proxy. Tunnel your local port, e.g. `cloudflared tunnel --url http://localhost:3000`, and put the tunnel host in the URL mapping. Use a separate dev application so you do not disturb the deployed one.
+
+```bash
+npm test                                                # unit + end-to-end tests (no Discord/Mongo needed)
+MONGODB_TEST_URI=mongodb://127.0.0.1:27017 npm test     # also runs the stats integration test
+```
+
+## Layout
+
+- `src/game/` — pure Wordle logic: scoring, Duel and Turn-by-Turn engines, word lists. No Discord.
+- `src/activity/` — `room.js` (lobby, rounds, timers, snapshots per viewer), `rooms.js` (registry), `ws.js` (WebSocket protocol), `auth.js` (OAuth2 exchange, signed sessions).
+- `src/http.js` — static files, `/api/token`, `/health`, dev login.
+- `src/commands/` — slash commands and the Entry Point definition.
 - `src/db/` — MongoDB connection and `StatsRepo`.
+- `web/main.js`, `public/` — the Activity page.
+- `scripts/` — command registration and word list download.
 
 ## Word lists
 
-- `data/answers.txt`: the list of words accepted by NYT Wordle, from [tabatkins/wordle-list](https://github.com/tabatkins/wordle-list).
+- `data/answers.txt`: words accepted by NYT Wordle, from [tabatkins/wordle-list](https://github.com/tabatkins/wordle-list).
 - `data/allowed.txt`: 5-letter words from [dwyl/english-words](https://github.com/dwyl/english-words).
-
-## Rules details
-
-- Timing out in Turn-by-Turn burns your row and passes the turn. Timing out in Duel burns one of your six rows.
-- Guesses must be in the word list; invalid words cost nothing. Repeating a guess is allowed.
-- Forfeiting removes you from the series. With two players the other wins the round; with more, play continues without you.
-- A word is never reused within the same series.
