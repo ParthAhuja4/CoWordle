@@ -242,6 +242,24 @@ const MODE_OPTIONS = [
 ];
 const TURN_OPTIONS = [1, 2, 3].map((n) => ({ value: n, label: String(n) }));
 
+/** Seconds-per-turn presets from the server, plus the current value if it is not one of them. */
+function secondsOptions(snap) {
+  const opts = [...(snap.settings.turnSecondsOptions ?? [30, 45, 70, 90, 120])];
+  if (!opts.includes(snap.settings.turnSeconds)) opts.push(snap.settings.turnSeconds);
+  opts.sort((a, b) => a - b);
+  return opts.map((s) => ({ value: s, label: `${s}s` }));
+}
+
+function secondsPicker(snap, isHost) {
+  return segmented({
+    options: secondsOptions(snap),
+    current: snap.settings.turnSeconds,
+    disabled: !isHost,
+    label: 'Seconds per turn',
+    onPick: (turnSeconds) => send({ t: 'settings', turnSeconds }),
+  });
+}
+
 function modeSummary(snap) {
   const s = snap.settings;
   return s.mode === 'turn' ? `Turn-by-Turn · ${s.turnsEach} turn${s.turnsEach === 1 ? '' : 's'} each · ${s.turnSeconds}s per turn` : `Duel · ${s.turnSeconds}s per guess`;
@@ -331,6 +349,8 @@ function renderLobby(snap) {
       onPick: (turnsEach) => send({ t: 'settings', turnsEach }),
     }),
   );
+  $('#secs-label').textContent = snap.settings.mode === 'turn' ? 'Seconds per turn' : 'Seconds per guess';
+  $('#secs-picker').replaceChildren(secondsPicker(snap, isHost));
 
   const enough = snap.members.length >= snap.settings.minPlayers;
   const nextRound = snap.roundNumber + 1;
@@ -659,7 +679,8 @@ function resultCard(snap) {
 function nextRoundBlock(snap) {
   const isHost = snap.hostId === snap.me;
   const host = member(snap, snap.hostId);
-  const connected = snap.members.filter((m) => m.role !== 'away').length;
+  // Only people with a live socket count: the server refuses to start otherwise.
+  const connected = snap.members.filter((m) => m.connected !== false).length;
   const enough = connected >= snap.settings.minPlayers;
   const nextRound = snap.roundNumber + 1;
 
@@ -696,6 +717,15 @@ function nextRoundBlock(snap) {
         onPick: (turnsEach) => send({ t: 'settings', turnsEach }),
       }),
     );
+    block.appendChild(row);
+  }
+  {
+    const row = document.createElement('div');
+    row.className = 'next-secs';
+    const lbl = document.createElement('span');
+    lbl.className = 'turns-label';
+    lbl.textContent = snap.settings.mode === 'turn' ? 'Seconds per turn' : 'Seconds per guess';
+    row.append(lbl, secondsPicker(snap, isHost));
     block.appendChild(row);
   }
 

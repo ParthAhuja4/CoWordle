@@ -1,7 +1,7 @@
 /**
  * WebSocket transport between the Activity page and its Room.
  *
- * Browser → server: { t:'settings', mode?, turnsEach? } · { t:'start' } ·
+ * Browser → server: { t:'settings', mode?, turnsEach?, turnSeconds? } · { t:'start' } ·
  *                   { t:'guess', word } · { t:'forfeit' } · { t:'next' } (host starts next round) · { t:'ping' }
  * Server → browser: { t:'state', … } (full snapshot) · { t:'guess', ok, … } ·
  *                   { t:'event', kind, text } · { t:'error', text } · { t:'pong' }
@@ -59,7 +59,7 @@ export function attachWebSocket(server, config) {
             room.send(ws, { t: 'pong', now: Date.now() });
             break;
           case 'settings':
-            room.setSettings(userId, { mode: msg.mode, turnsEach: msg.turnsEach });
+            room.setSettings(userId, { mode: msg.mode, turnsEach: msg.turnsEach, turnSeconds: msg.turnSeconds });
             break;
           case 'start':
             room.start(userId);

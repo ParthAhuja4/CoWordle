@@ -13,7 +13,7 @@ function required(name) {
   return v;
 }
 
-const turnSeconds = Number.parseInt(process.env.TURN_SECONDS ?? '30', 10);
+const turnSeconds = Number.parseInt(process.env.TURN_SECONDS ?? '70', 10);
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 
 export const config = {
@@ -25,7 +25,7 @@ export const config = {
   /** Optional. Without it the game still runs, but nothing is recorded and /stats is disabled. */
   mongoUri: process.env.MONGODB_URI || null,
   mongoDb: process.env.MONGODB_DB || 'cowordle',
-  turnSeconds: Number.isFinite(turnSeconds) && turnSeconds >= 10 ? turnSeconds : 30,
+  turnSeconds: Number.isFinite(turnSeconds) && turnSeconds >= 10 ? turnSeconds : 70,
   port: Number.isFinite(port) && port > 0 ? port : 3000,
   /** Secret used to sign browser sessions; falls back to the client secret. */
   sessionSecret: process.env.SESSION_SECRET || null,

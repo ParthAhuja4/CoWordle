@@ -22,4 +22,4 @@ services:
       - key: MONGODB_DB
         value: cowordle
       - key: TURN_SECONDS
-        value: "30"
+        value: "70"

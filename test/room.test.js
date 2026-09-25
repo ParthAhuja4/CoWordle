@@ -61,7 +61,7 @@ test('first joiner is host; only host changes settings and starts; need 2 player
   assert.equal(room.setSettings('b', { mode: 'turn' }), false);
   assert.equal(b.last('error').text, 'Only the host can change settings.');
   assert.equal(room.setSettings('a', { mode: 'turn', turnsEach: 3 }), true);
-  assert.deepEqual(room.settings, { mode: 'turn', turnsEach: 3 });
+  assert.deepEqual(room.settings, { mode: 'turn', turnsEach: 3, turnSeconds: 30 });
   assert.equal(room.setSettings('a', { turnsEach: 9 }), false);
 
   assert.equal(room.start('b'), false);
@@ -69,6 +69,38 @@ test('first joiner is host; only host changes settings and starts; need 2 player
   assert.equal(room.start('a'), true);
   assert.equal(room.phase, 'playing');
   assert.deepEqual(room.participants, ['a', 'b']);
+  room.destroy();
+});
+
+test('host picks seconds per turn; the timer uses it; bounds are enforced; non-host cannot', () => {
+  const { room, join } = setup();
+  const a = join('a');
+  const b = join('b');
+  assert.equal(a.last().settings.turnSeconds, 30, 'room starts on the configured default');
+  assert.ok(Array.isArray(a.last().settings.turnSecondsOptions), 'presets are announced to the client');
+
+  assert.equal(room.setSettings('b', { turnSeconds: 90 }), false, 'non-host cannot change it');
+  assert.equal(room.setSettings('a', { turnSeconds: 5 }), false, 'below the floor');
+  assert.equal(room.setSettings('a', { turnSeconds: 301 }), false, 'above the ceiling');
+  assert.equal(room.setSettings('a', { turnSeconds: 45.5 }), false, 'must be an integer');
+  assert.match(a.last('error').text, /Seconds per turn/);
+  assert.equal(room.settings.turnSeconds, 30);
+
+  assert.equal(room.setSettings('a', { turnSeconds: 90 }), true);
+  assert.equal(b.last().settings.turnSeconds, 90, 'everyone sees the new value');
+
+  room.start('a');
+  const before = Date.now();
+  const dl = a.last().round.boards.a.deadline;
+  assert.ok(dl >= before + 90_000 - 50 && dl <= before + 90_000 + 1000, `deadline uses 90s (got ${dl - before}ms)`);
+  assert.equal(room.setSettings('a', { turnSeconds: 30 }), false, 'locked while playing');
+
+  room.forfeit('b');
+  assert.equal(room.phase, 'roundOver');
+  assert.equal(room.setSettings('a', { turnSeconds: 45 }), true, 'changeable between rounds');
+  room.next('a');
+  const dl2 = a.last().round.boards.a.deadline;
+  assert.ok(dl2 - Date.now() <= 45_000 + 50 && dl2 - Date.now() > 44_000, 'next round uses the new value');
   room.destroy();
 });
 

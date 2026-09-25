@@ -12,7 +12,7 @@ export function getOrCreateRoom(instanceId, { guildId = null, channelId = null }
     instanceId,
     guildId,
     channelId,
-    turnSeconds: ctx.config?.turnSeconds ?? 30,
+    turnSeconds: ctx.config?.turnSeconds ?? 70,
     stats: ctx.stats,
     log,
     onEmpty: (r) => {

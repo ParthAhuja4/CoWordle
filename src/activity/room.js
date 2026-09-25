@@ -19,6 +19,9 @@ import {
   MIN_PLAYERS,
   DEFAULT_TURNS,
   MAX_TURNS,
+  TURN_SECONDS_OPTIONS,
+  MIN_TURN_SECONDS,
+  MAX_TURN_SECONDS,
   MODES,
   REMATCH_IDLE_MS,
   DISCONNECT_GRACE_MS,
@@ -32,22 +35,27 @@ import { scheduleGuarded, clearTimer } from '../util/timers.js';
 
 const noopLog = { info() {}, warn() {}, error() {} };
 
+function clampTurnSeconds(n) {
+  const s = Number(n);
+  if (!Number.isFinite(s)) return TURN_SECONDS_OPTIONS[2];
+  return Math.min(MAX_TURN_SECONDS, Math.max(MIN_TURN_SECONDS, Math.round(s)));
+}
+
 export class Room {
   /**
    * @param {object} p
    * @param {string} p.instanceId
    * @param {string|null} p.guildId   verified guild the Activity runs in (null in DMs)
    * @param {string|null} p.channelId
-   * @param {number} p.turnSeconds
+   * @param {number} p.turnSeconds   default seconds per guess/turn; the host can change it per room
    * @param {{recordRoundResult:Function}|null} p.stats
    * @param {Function} p.onEmpty       called when the room has been empty for ROOM_EMPTY_TTL_MS
    * @param {object} [p.log]
    */
-  constructor({ instanceId, guildId = null, channelId = null, turnSeconds = 30, stats = null, onEmpty = () => {}, log = noopLog }) {
+  constructor({ instanceId, guildId = null, channelId = null, turnSeconds = 70, stats = null, onEmpty = () => {}, log = noopLog }) {
     this.id = instanceId;
     this.guildId = guildId;
     this.channelId = channelId;
-    this.turnSeconds = turnSeconds;
     this.stats = stats;
     this.onEmpty = onEmpty;
     this.log = log;
@@ -56,7 +64,7 @@ export class Room {
     this.members = new Map();
     this.hostId = null;
     this.phase = 'lobby';
-    this.settings = { mode: 'duel', turnsEach: DEFAULT_TURNS };
+    this.settings = { mode: 'duel', turnsEach: DEFAULT_TURNS, turnSeconds: clampTurnSeconds(turnSeconds) };
     this.score = { draws: 0 };
     this.roundNumber = 0;
     this.roundsPlayed = 0;
@@ -90,7 +98,9 @@ export class Room {
       clearTimer(m, 'disconnectTimer');
     }
     m.sockets.add(socket);
-    if (!this.hostId || !this.isConnected(this.hostId)) this.hostId = m.id;
+    // No connected host (first joiner, or the host dropped mid-round): the
+    // earliest connected member takes over, same rule as every other handover.
+    if (!this.hostId || !this.isConnected(this.hostId)) this.hostId = this.connectedMembers()[0]?.id ?? m.id;
     this.broadcast();
     return m;
   }
@@ -148,7 +158,7 @@ export class Room {
 
   /* --------------------------------------------------------------- lobby */
 
-  setSettings(userId, { mode, turnsEach }) {
+  setSettings(userId, { mode, turnsEach, turnSeconds }) {
     if (userId !== this.hostId) return this.fail(userId, 'Only the host can change settings.');
     if (this.phase === 'playing') return this.fail(userId, 'Finish the round first.');
     if (mode !== undefined) {
@@ -159,6 +169,13 @@ export class Room {
       const n = Number(turnsEach);
       if (!Number.isInteger(n) || n < 1 || n > MAX_TURNS) return this.fail(userId, `Turns must be 1–${MAX_TURNS}.`);
       this.settings.turnsEach = n;
+    }
+    if (turnSeconds !== undefined) {
+      const s = Number(turnSeconds);
+      if (!Number.isInteger(s) || s < MIN_TURN_SECONDS || s > MAX_TURN_SECONDS) {
+        return this.fail(userId, `Seconds per turn must be ${MIN_TURN_SECONDS}–${MAX_TURN_SECONDS}.`);
+      }
+      this.settings.turnSeconds = s;
     }
     this.broadcast();
     return true;
@@ -200,7 +217,7 @@ export class Room {
   /* --------------------------------------------------------------- timers */
 
   turnMs() {
-    return this.turnSeconds * 1000;
+    return this.settings.turnSeconds * 1000;
   }
 
   armTurnTimer() {
@@ -410,6 +427,7 @@ export class Room {
       id: m.id,
       name: m.name,
       avatar: m.avatar,
+      connected: true,
       role: this.phase === 'lobby' ? 'player' : this.participants.includes(m.id) ? (this.forfeited.has(m.id) ? 'left' : 'player') : 'spectator',
     }));
     // Participants who dropped mid-round still show on the board.
@@ -417,7 +435,7 @@ export class Room {
       for (const id of this.participants) {
         if (!members.some((m) => m.id === id)) {
           const m = this.members.get(id);
-          members.push({ id, name: m?.name ?? 'Player', avatar: m?.avatar ?? null, role: this.forfeited.has(id) ? 'left' : 'away' });
+          members.push({ id, name: m?.name ?? 'Player', avatar: m?.avatar ?? null, connected: false, role: this.forfeited.has(id) ? 'left' : 'away' });
         }
       }
     }
@@ -428,7 +446,15 @@ export class Room {
       me: viewerId,
       hostId: this.hostId,
       phase: this.phase,
-      settings: { ...this.settings, turnSeconds: this.turnSeconds, maxPlayers: MAX_PLAYERS, minPlayers: MIN_PLAYERS, maxTurns: MAX_TURNS },
+      settings: {
+        ...this.settings,
+        maxPlayers: MAX_PLAYERS,
+        minPlayers: MIN_PLAYERS,
+        maxTurns: MAX_TURNS,
+        turnSecondsOptions: TURN_SECONDS_OPTIONS,
+        minTurnSeconds: MIN_TURN_SECONDS,
+        maxTurnSeconds: MAX_TURN_SECONDS,
+      },
       members,
       participants: this.participants,
       score: this.score,

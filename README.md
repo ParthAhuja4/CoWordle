@@ -4,8 +4,8 @@ CoWordle as a **Discord Activity**: type `/cowordle` in any channel and a real W
 
 ## How it plays
 
-- **Duel** (default): same hidden word, your own board, everyone at once. 30 s per guess, 6 rows. You only ever see your rivals' **colours**, never their letters, not even after the round. Fewest guesses wins; same count is a tie; nobody solving is a draw. Once someone solves it, anyone who has used fewer rows gets a last chance to tie or beat it.
-- **Turn-by-Turn**: one shared board, players take turns (30 s each, 1–3 turns per player). Every guess helps everyone. First to solve wins; a full board is a draw.
+- **Duel** (default): same hidden word, your own board, everyone at once. 6 rows, 70 s per guess by default (the host can pick 30–120 s). You only ever see your rivals' **colours**, never their letters, not even after the round. Fewest guesses wins; same count is a tie; nobody solving is a draw. Once someone solves it, anyone who has used fewer rows gets a last chance to tie or beat it.
+- **Turn-by-Turn**: one shared board, players take turns (70 s each by default, 1–3 turns per player). Every guess helps everyone. First to solve wins; a full board is a draw.
 - **2–5 players**, round after round with a running score. The first person to open the Activity is the **host**: they pick the mode and start. After each round the result card lets the host pick the mode again (it defaults to the one just played) and start the next round; people who joined mid-round come in on that one. Timing out burns a row. Forfeiting (two taps) removes you from the round; if you are the last one standing, you win.
 - **Secret words** come from the curated Wordle answer list (~2.3k everyday words), so they are fair to guess; the full NYT list plus a general dictionary is still accepted for guesses.
 - **Stats**: `/stats [user]` and `/leaderboard [sort]` per server, stored in MongoDB. `/help` explains the rules in Discord.
