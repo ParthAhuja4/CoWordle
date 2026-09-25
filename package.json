@@ -1,0 +1,21 @@
+{
+  "name": "co-wordle",
+  "version": "1.0.0",
+  "description": "CoWordle / Victordle style multiplayer Wordle for Discord: Turn-by-Turn and Duel modes, lobbies, challenges, rematches and stats.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "register": "node scripts/register-commands.js",
+    "words": "bash scripts/fetch-words.sh",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "mongodb": "^7.6.0"
+  }
+}
