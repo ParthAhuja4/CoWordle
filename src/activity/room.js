@@ -10,7 +10,9 @@
  * Phases:
  *   lobby      → host picks mode/turns and presses Start (2–5 connected people)
  *   playing    → a round is in progress
- *   roundOver  → word revealed; connected participants vote "Play again"
+ *   roundOver  → word revealed; the host picks the mode for the next round and
+ *                starts it from the result card (or the room drifts back to
+ *                the lobby after REMATCH_IDLE_MS)
  */
 import {
   MAX_PLAYERS,
@@ -62,9 +64,8 @@ export class Room {
     /** user ids taking part in the current/last round */
     this.participants = [];
     this.forfeited = new Set();
-    this.rematchVotes = new Set();
-    this.rematchDeadline = null;
-    this.rematchTimer = null;
+    this.nextDeadline = null;
+    this.nextTimer = null;
     this.usedSecrets = new Set();
     this.lastResult = null;
     this.emptyTimer = null;
@@ -122,7 +123,6 @@ export class Room {
     this.members.delete(m.id);
     this.event('leave', `${m.name} left`);
     if (this.hostId === m.id) this.hostId = this.connectedMembers()[0]?.id ?? null;
-    if (this.phase === 'roundOver') this.checkRematch();
     if (this.connectedMembers().length === 0) this.scheduleEmpty();
   }
 
@@ -176,9 +176,8 @@ export class Room {
   /* --------------------------------------------------------------- rounds */
 
   startRound(playerIds) {
-    clearTimer(this, 'rematchTimer');
-    this.rematchVotes = new Set();
-    this.rematchDeadline = null;
+    clearTimer(this, 'nextTimer');
+    this.nextDeadline = null;
     this.forfeited = new Set();
     this.lastResult = null;
     this.phase = 'playing';
@@ -352,7 +351,10 @@ export class Room {
           result,
           secret: round.secret,
         })
+        .then(() => this.log.info(`stats: recorded round ${this.roundNumber} of ${this.id} (guild ${this.guildId}, ${result})`))
         .catch((err) => this.log.error('recordRoundResult failed:', err));
+    } else {
+      this.log.warn(`stats: skipped round ${this.roundNumber} of ${this.id} (${!this.stats ? 'no database configured' : 'no guild id in session'})`);
     }
 
     const text =
@@ -363,7 +365,7 @@ export class Room {
           : `Nobody got it — the word was ${round.secret.toUpperCase()}`;
     this.event('result', text);
 
-    // Drop participants who already disconnected; they can't vote.
+    // Drop participants who already disconnected; they are simply gone.
     for (const id of this.participants) {
       const m = this.members.get(id);
       if (m && m.sockets.size === 0) {
@@ -372,49 +374,30 @@ export class Room {
         if (this.hostId === id) this.hostId = this.connectedMembers()[0]?.id ?? null;
       }
     }
+    if (this.connectedMembers().length === 0) this.scheduleEmpty();
 
-    this.rematchDeadline = Date.now() + REMATCH_IDLE_MS;
-    this.rematchTimer = setTimeout(() => {
-      if (this.phase === 'roundOver') this.backToLobby('The vote timed out.');
+    this.nextDeadline = Date.now() + REMATCH_IDLE_MS;
+    this.nextTimer = setTimeout(() => {
+      if (this.phase === 'roundOver') this.backToLobby('Nobody started the next round.');
     }, REMATCH_IDLE_MS);
 
     this.broadcast();
-    this.checkRematch();
   }
 
-  /** Participants who are still connected: the people whose vote is needed. */
-  voters() {
-    return this.participants.filter((id) => this.isConnected(id));
-  }
-
-  voteRematch(userId) {
-    if (this.phase !== 'roundOver') return this.fail(userId, 'There is no vote right now.');
-    if (!this.participants.includes(userId)) return this.fail(userId, 'You join automatically when the next round starts.');
-    this.rematchVotes.add(userId);
-    this.broadcast();
-    this.checkRematch();
+  /** Host starts the next round from the result card. Everyone connected plays. */
+  next(userId) {
+    if (this.phase !== 'roundOver') return this.fail(userId, 'There is no round to continue.');
+    if (userId !== this.hostId) return this.fail(userId, `Only the host (${this.name(this.hostId)}) can start the next round.`);
+    const connected = this.connectedMembers();
+    if (connected.length < MIN_PLAYERS) return this.fail(userId, `You need at least ${MIN_PLAYERS} players for the next round.`);
+    this.startRound(connected.slice(0, MAX_PLAYERS).map((m) => m.id));
     return true;
   }
 
-  checkRematch() {
-    if (this.phase !== 'roundOver') return;
-    const voters = this.voters();
-    const connected = this.connectedMembers();
-    if (connected.length < MIN_PLAYERS) {
-      // Not enough people to play on. Wait for the vote timeout, or for someone to join.
-      if (connected.length === 0) this.scheduleEmpty();
-      return;
-    }
-    if (voters.length === 0 || voters.every((id) => this.rematchVotes.has(id))) {
-      this.startRound(connected.slice(0, MAX_PLAYERS).map((m) => m.id));
-    }
-  }
-
   backToLobby(reason) {
-    clearTimer(this, 'rematchTimer');
+    clearTimer(this, 'nextTimer');
     this.phase = 'lobby';
-    this.rematchVotes = new Set();
-    this.rematchDeadline = null;
+    this.nextDeadline = null;
     if (reason) this.event('info', reason);
     this.broadcast();
   }
@@ -454,7 +437,7 @@ export class Room {
       round: null,
       keys: {},
       result: this.phase === 'roundOver' ? this.lastResult : null,
-      rematch: this.phase === 'roundOver' ? { votes: [...this.rematchVotes], needed: this.voters(), deadline: this.rematchDeadline } : null,
+      next: this.phase === 'roundOver' ? { deadline: this.nextDeadline } : null,
     };
 
     const round = this.round;
@@ -544,7 +527,7 @@ export class Room {
     if (this.destroyed) return;
     this.destroyed = true;
     this.clearRoundTimers();
-    clearTimer(this, 'rematchTimer');
+    clearTimer(this, 'nextTimer');
     clearTimer(this, 'emptyTimer');
     for (const m of this.members.values()) {
       clearTimer(m, 'disconnectTimer');

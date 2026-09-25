@@ -6,7 +6,8 @@ CoWordle as a **Discord Activity**: type `/cowordle` in any channel and a real W
 
 - **Duel** (default): same hidden word, your own board, everyone at once. 30 s per guess, 6 rows. You only ever see your rivals' **colours**, never their letters, not even after the round. Fewest guesses wins; same count is a tie; nobody solving is a draw. Once someone solves it, anyone who has used fewer rows gets a last chance to tie or beat it.
 - **Turn-by-Turn**: one shared board, players take turns (30 s each, 1–3 turns per player). Every guess helps everyone. First to solve wins; a full board is a draw.
-- **2–5 players**, round after round with a running score. After a round everyone taps **Play again**; people who joined mid-round come in on the next one. Timing out burns a row. Forfeiting (two taps) removes you from the round; if you are the last one standing, you win.
+- **2–5 players**, round after round with a running score. The first person to open the Activity is the **host**: they pick the mode and start. After each round the result card lets the host pick the mode again (it defaults to the one just played) and start the next round; people who joined mid-round come in on that one. Timing out burns a row. Forfeiting (two taps) removes you from the round; if you are the last one standing, you win.
+- **Secret words** come from the curated Wordle answer list (~2.3k everyday words), so they are fair to guess; the full NYT list plus a general dictionary is still accepted for guesses.
 - **Stats**: `/stats [user]` and `/leaderboard [sort]` per server, stored in MongoDB. `/help` explains the rules in Discord.
 
 ## How it is built
@@ -35,6 +36,8 @@ The front end (`web/main.js`, bundled by esbuild into `public/app.js`) is plain 
 ### 2. MongoDB (optional but recommended)
 
 Free M0 cluster at <https://www.mongodb.com/atlas>: create a database user, allow access from `0.0.0.0/0`, copy the connection string (`MONGODB_URI`). Without it everything still works but nothing is recorded and `/stats` is disabled.
+
+If `/leaderboard` stays empty after playing: rounds are only recorded when `MONGODB_URI` is set **and** the Activity was opened inside a server (not a DM). The server log prints `stats: recorded round …` or `stats: skipped round … (reason)` after every round.
 
 ### 3. Deploy on Render (free tier)
 
@@ -89,5 +92,7 @@ MONGODB_TEST_URI=mongodb://127.0.0.1:27017 npm test     # also runs the stats in
 
 ## Word lists
 
-- `data/answers.txt`: words accepted by NYT Wordle, from [tabatkins/wordle-list](https://github.com/tabatkins/wordle-list).
-- `data/allowed.txt`: 5-letter words from [dwyl/english-words](https://github.com/dwyl/english-words).
+- `data/answers.txt`: the secret-word pool, the curated original Wordle answer list (~2.3k everyday words) from [cfreshman's gist](https://gist.github.com/cfreshman/a03ef2cba789d8cf00c08f767e0fad7b).
+- `data/allowed.txt`: extra valid guesses: every word NYT Wordle accepts ([tabatkins/wordle-list](https://github.com/tabatkins/wordle-list)) plus 5-letter words from [dwyl/english-words](https://github.com/dwyl/english-words).
+
+`npm run words` refreshes both; a failed download keeps the committed file.

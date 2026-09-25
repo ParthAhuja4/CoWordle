@@ -17,6 +17,7 @@ const WORD_LEN = 5;
 const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
 
 const state = {
+  sdk: null, // DiscordSDK instance (null under dev login)
   session: null,
   instanceId: null,
   channelId: null,
@@ -49,6 +50,7 @@ async function discordBoot() {
     throw new Error('Open CoWordle from inside Discord: type /cowordle in a channel.');
   }
   const sdk = new DiscordSDK(cfg.clientId);
+  state.sdk = sdk;
   setLoading('Connecting to Discord…');
   await sdk.ready();
   setLoading('Signing you in…');
@@ -231,13 +233,56 @@ function scoreText(snap) {
 /* ------------------------------------------------------------------ lobby */
 
 const MODE_DESC = {
-  duel: 'Same word, your own board, all at once. You only see your rivals’ colours, never their letters. Fewest guesses wins.',
-  turn: 'One shared board. Take turns guessing; every guess helps everyone. First to solve wins.',
+  duel: 'Everyone gets the same word on their own board. You see your rivals’ colours, never their letters. Fewest guesses wins.',
+  turn: 'One board for everyone. Take turns guessing; every guess helps the next player. First to solve it wins.',
 };
+const MODE_OPTIONS = [
+  { value: 'duel', label: 'Duel' },
+  { value: 'turn', label: 'Turn-by-Turn' },
+];
+const TURN_OPTIONS = [1, 2, 3].map((n) => ({ value: n, label: String(n) }));
+
+function modeSummary(snap) {
+  const s = snap.settings;
+  return s.mode === 'turn' ? `Turn-by-Turn · ${s.turnsEach} turn${s.turnsEach === 1 ? '' : 's'} each · ${s.turnSeconds}s per turn` : `Duel · ${s.turnSeconds}s per guess`;
+}
+
+/**
+ * Segmented radio control. Used for the turns picker in the lobby and for the
+ * mode + turns pickers on the result card, so they cannot drift apart.
+ */
+function segmented({ options, current, onPick, disabled = false, label = '' }) {
+  const seg = document.createElement('div');
+  seg.className = 'seg';
+  seg.setAttribute('role', 'radiogroup');
+  if (label) seg.setAttribute('aria-label', label);
+  seg.setAttribute('aria-disabled', String(disabled));
+  for (const o of options) {
+    const b = document.createElement('button');
+    const on = o.value === current;
+    b.className = 'seg-btn' + (on ? ' on' : '');
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(on));
+    b.disabled = disabled;
+    b.textContent = o.label;
+    b.onclick = () => {
+      if (!disabled && !on) onPick(o.value);
+    };
+    seg.appendChild(b);
+  }
+  return seg;
+}
 
 function renderLobby(snap) {
   show('lobby');
   const isHost = snap.hostId === snap.me;
+  const host = member(snap, snap.hostId);
+  const role = $('#lobby-role');
+  role.classList.toggle('host', isHost);
+  role.textContent = isHost
+    ? 'You’re the host. Pick a mode and start once everyone’s in.'
+    : `${host.name} is the host and will pick the mode and start the game.`;
+  $('#invite-btn').hidden = !state.sdk;
   const list = $('#lobby-players');
   const rows = snap.members.map((m) => {
     const li = document.createElement('li');
@@ -265,7 +310,6 @@ function renderLobby(snap) {
   }
   list.replaceChildren(...rows);
   $('#lobby-count').textContent = `${snap.members.length} / ${snap.settings.maxPlayers}`;
-  $('#mode-lock').hidden = isHost;
 
   const modeSeg = $('#mode-picker');
   modeSeg.setAttribute('aria-disabled', String(!isHost));
@@ -278,23 +322,25 @@ function renderLobby(snap) {
   $('#mode-desc').textContent = MODE_DESC[snap.settings.mode] + ` ${snap.settings.turnSeconds}s per ${snap.settings.mode === 'turn' ? 'turn' : 'guess'}.`;
   const turnsRow = $('#turns-row');
   turnsRow.hidden = snap.settings.mode !== 'turn';
-  const turnsSeg = $('#turns-picker');
-  turnsSeg.setAttribute('aria-disabled', String(!isHost));
-  for (const b of turnsSeg.querySelectorAll('button')) {
-    const on = Number(b.dataset.turns) === snap.settings.turnsEach;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-checked', String(on));
-    b.disabled = !isHost;
-  }
+  $('#turns-picker').replaceChildren(
+    segmented({
+      options: TURN_OPTIONS,
+      current: snap.settings.turnsEach,
+      disabled: !isHost,
+      label: 'Turns per player',
+      onPick: (turnsEach) => send({ t: 'settings', turnsEach }),
+    }),
+  );
 
   const enough = snap.members.length >= snap.settings.minPlayers;
+  const nextRound = snap.roundNumber + 1;
   const startBtn = $('#start-btn');
   const wait = $('#lobby-wait');
   startBtn.hidden = !isHost;
   startBtn.disabled = !enough;
-  startBtn.textContent = enough ? (snap.roundsPlayed ? 'Play again' : 'Start game') : `Waiting for players (${snap.members.length}/${snap.settings.minPlayers})`;
+  startBtn.textContent = enough ? `3 · Start round ${nextRound}` : `Waiting for players (${snap.members.length}/${snap.settings.minPlayers})`;
   wait.hidden = isHost;
-  wait.textContent = enough ? `Waiting for ${member(snap, snap.hostId).name} to start…` : 'Waiting for more players…';
+  wait.textContent = enough ? `Waiting for ${host.name} to start round ${nextRound}…` : `Waiting for more players (${snap.members.length}/${snap.settings.minPlayers})…`;
 
   const score = $('#lobby-score');
   const st = scoreText(snap);
@@ -306,11 +352,17 @@ $('#mode-picker').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-mode]');
   if (b && !b.disabled) send({ t: 'settings', mode: b.dataset.mode });
 });
-$('#turns-picker').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-turns]');
-  if (b && !b.disabled) send({ t: 'settings', turnsEach: Number(b.dataset.turns) });
-});
 $('#start-btn').addEventListener('click', () => send({ t: 'start' }));
+$('#invite-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  try {
+    await state.sdk.commands.openInviteDialog();
+  } catch (err) {
+    console.warn('invite dialog failed', err);
+    btn.hidden = true;
+    toast('Invites are not available here. Friends can tap the activity in the channel to join.', true);
+  }
+});
 
 /* ------------------------------------------------------------------- game */
 
@@ -339,6 +391,7 @@ function renderGame(snap) {
 
   // Score chips
   const chips = $('#score-chips');
+  chips.classList.toggle('many', snap.participants.length >= 4);
   chips.replaceChildren(
     ...snap.participants.map((id) => {
       const m = member(snap, id);
@@ -357,7 +410,7 @@ function renderGame(snap) {
       return c;
     }),
   );
-  $('#round-label').textContent = `${round?.kind === 'turn' ? 'Turn-by-Turn' : 'Duel'} · Round ${snap.roundNumber}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
+  $('#round-label').textContent = `Round ${snap.roundNumber} · ${round?.kind === 'turn' ? 'Turn-by-Turn' : 'Duel'}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
 
   // Status line
   const status = $('#status');
@@ -589,40 +642,83 @@ function resultCard(snap) {
   }
   card.appendChild(board);
 
-  const rm = snap.rematch ?? { votes: [], needed: [], deadline: null };
-  const iVote = snap.participants.includes(snap.me) && rm.needed.includes(snap.me);
-  const btn = document.createElement('button');
-  btn.className = 'btn btn-primary btn-lg';
-  if (iVote) {
-    const voted = rm.votes.includes(snap.me);
-    btn.textContent = voted ? `Waiting for others (${rm.votes.length}/${rm.needed.length})` : `Play again (${rm.votes.length}/${rm.needed.length})`;
-    btn.disabled = voted;
-    btn.onclick = () => send({ t: 'rematch' });
-  } else {
-    btn.textContent = 'You’ll join the next round';
-    btn.disabled = true;
-  }
-  card.appendChild(btn);
-
-  const votes = document.createElement('div');
-  votes.className = 'votes';
-  for (const id of rm.needed) {
-    const m = member(snap, id);
-    const yes = rm.votes.includes(id);
-    const v = document.createElement('span');
-    v.className = 'v' + (yes ? ' yes' : '');
-    v.appendChild(avatarEl(m));
-    v.appendChild(document.createTextNode(`${m.name}${yes ? ' ✓' : ''}`));
-    votes.appendChild(v);
-  }
-  card.appendChild(votes);
+  card.appendChild(nextRoundBlock(snap));
 
   const cd = document.createElement('p');
   cd.className = 'countdown';
-  cd.dataset.deadline = rm.deadline ?? '';
-  cd.id = 'vote-countdown';
+  cd.dataset.deadline = snap.next?.deadline ?? '';
+  cd.id = 'next-countdown';
   card.appendChild(cd);
   return card;
+}
+
+/**
+ * "Next round" section of the result card. The host picks the mode (defaults
+ * to the one just played) and starts; everyone else watches the choice update.
+ */
+function nextRoundBlock(snap) {
+  const isHost = snap.hostId === snap.me;
+  const host = member(snap, snap.hostId);
+  const connected = snap.members.filter((m) => m.role !== 'away').length;
+  const enough = connected >= snap.settings.minPlayers;
+  const nextRound = snap.roundNumber + 1;
+
+  const block = document.createElement('div');
+  block.className = 'next';
+
+  const head = document.createElement('div');
+  head.className = 'next-head';
+  head.textContent = `Round ${nextRound}`;
+  block.appendChild(head);
+
+  block.appendChild(
+    segmented({
+      options: MODE_OPTIONS,
+      current: snap.settings.mode,
+      disabled: !isHost,
+      label: 'Mode for the next round',
+      onPick: (mode) => send({ t: 'settings', mode }),
+    }),
+  );
+  if (snap.settings.mode === 'turn') {
+    const row = document.createElement('div');
+    row.className = 'next-turns';
+    const lbl = document.createElement('span');
+    lbl.className = 'turns-label';
+    lbl.textContent = 'Turns each';
+    row.append(
+      lbl,
+      segmented({
+        options: TURN_OPTIONS,
+        current: snap.settings.turnsEach,
+        disabled: !isHost,
+        label: 'Turns per player',
+        onPick: (turnsEach) => send({ t: 'settings', turnsEach }),
+      }),
+    );
+    block.appendChild(row);
+  }
+
+  if (isHost) {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-lg';
+    btn.textContent = enough ? `Start round ${nextRound}` : `Waiting for players (${connected}/${snap.settings.minPlayers})`;
+    btn.disabled = !enough;
+    btn.onclick = () => send({ t: 'next' });
+    block.appendChild(btn);
+  } else {
+    const wait = document.createElement('p');
+    wait.className = 'wait';
+    wait.textContent = `Waiting for ${host.name} to start ${modeSummary(snap)}`;
+    block.appendChild(wait);
+    if (!snap.participants.includes(snap.me)) {
+      const sub = document.createElement('p');
+      sub.className = 'sub';
+      sub.textContent = 'You’ll play in the next round.';
+      block.appendChild(sub);
+    }
+  }
+  return block;
 }
 
 function renderKeyboard(snap) {
@@ -737,10 +833,10 @@ function tickTimer() {
       fill.style.width = '0%';
     }
   }
-  const cd = document.getElementById('vote-countdown');
+  const cd = document.getElementById('next-countdown');
   if (cd && cd.dataset.deadline) {
     const left = Math.max(0, Number(cd.dataset.deadline) - (Date.now() + state.offset));
-    cd.textContent = `Starts when everyone taps Play again · ${Math.ceil(left / 1000)}s`;
+    cd.textContent = `Back to the lobby in ${Math.ceil(left / 1000)}s if nobody starts`;
   }
 }
 setInterval(tickTimer, 250);

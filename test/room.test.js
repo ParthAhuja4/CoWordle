@@ -1,5 +1,5 @@
 /**
- * Room state machine with fake sockets: lobby → round → rematch, visibility
+ * Room state machine with fake sockets: lobby → round → next round, visibility
  * rules (opponent letters never leak), forfeits and disconnects.
  */
 import { test, after } from 'node:test';
@@ -121,7 +121,8 @@ test('duel: opponents see colours only, guesser sees letters; solving ends the r
   assert.equal(over.round.secret, secret, 'word revealed at the end');
   assert.equal(over.round.boards.a.rows[1].word, null, 'letters stay hidden even after the round');
   assert.equal(over.round.boards.b.rows[0].word, over.round.boards.b.rows[0].word);
-  assert.deepEqual(over.rematch.needed, ['a', 'b']);
+  assert.ok(over.next.deadline > Date.now(), 'next-round deadline is announced');
+  assert.equal(over.score.a, 1, 'winner’s score is in the snapshot');
 
   await new Promise((r) => setImmediate(r));
   assert.equal(recorded.length, 1);
@@ -130,28 +131,50 @@ test('duel: opponents see colours only, guesser sees letters; solving ends the r
   room.destroy();
 });
 
-test('rematch starts when every connected participant votes; spectator is folded in', () => {
+test('next round: only the host starts it, mode picked between rounds applies, spectator is folded in', () => {
   const { room, join } = setup();
   const a = join('a');
-  join('b');
+  const b = join('b');
   room.start('a');
   const secret = room.round.secret;
   room.guess('a', secret);
-  room.guess('b', miss(secret));
-  room.guess('b', miss(secret)); // b cannot beat 1 any more? bestSolve=1, b rows=1 → done after first miss
+  room.guess('b', miss(secret)); // bestSolve=1, b has used 1 row → cannot beat it → round over
   assert.equal(room.phase, 'roundOver');
+  assert.equal(room.score.a, 1);
 
   const c = join('c'); // joins between rounds
-  assert.equal(room.voteRematch('c'), false, 'spectators do not vote');
-  assert.equal(room.voteRematch('a'), true);
+  assert.equal(room.next('b'), false, 'non-host cannot start');
+  assert.match(b.last('error').text, /host/);
+  assert.equal(room.next('c'), false);
   assert.equal(room.phase, 'roundOver');
-  assert.equal(room.voteRematch('b'), true);
+
+  assert.equal(room.setSettings('a', { mode: 'turn', turnsEach: 1 }), true, 'host changes mode between rounds');
+  assert.equal(c.last().settings.mode, 'turn', 'everyone sees the chosen mode');
+
+  assert.equal(room.next('a'), true);
   assert.equal(room.phase, 'playing');
   assert.equal(room.roundNumber, 2);
+  assert.equal(room.round.kind, 'turn', 'round 2 uses the newly picked mode');
   assert.deepEqual(room.participants, ['a', 'b', 'c']);
-  assert.ok(c.last().round.boards.c, 'new player has a board');
+  assert.deepEqual(c.last().round.order, ['a', 'b', 'c'], 'new player is in the round');
   assert.notEqual(room.round.secret, secret, 'no word reuse within the room');
   assert.equal(a.last().roundNumber, 2);
+  assert.equal(a.last().score.a, 1, 'series score carries over');
+  assert.equal(room.next('a'), false, 'cannot start while playing');
+  room.destroy();
+});
+
+test('next round refuses with fewer than two players connected', () => {
+  const { room, join } = setup();
+  const a = join('a');
+  const b = join('b');
+  room.start('a');
+  room.forfeit('b');
+  assert.equal(room.phase, 'roundOver');
+  room.leaveSocket(b);
+  assert.equal(room.next('a'), false);
+  assert.match(a.last('error').text, /at least 2/);
+  assert.equal(room.phase, 'roundOver');
   room.destroy();
 });
 
@@ -185,8 +208,7 @@ test('forfeit in a duel: other player wins; forfeiter still rejoins next round',
   assert.equal(room.phase, 'roundOver');
   assert.deepEqual(room.lastResult.winnerIds, ['a']);
   assert.equal(room.lastResult.result, 'forfeit');
-  room.voteRematch('a');
-  room.voteRematch('b');
+  assert.equal(room.next('a'), true);
   assert.equal(room.phase, 'playing');
   assert.deepEqual(room.participants, ['a', 'b']);
   room.destroy();
@@ -233,8 +255,7 @@ test('snapshot marks roles: player / spectator / left / away', () => {
   assert.equal(room.guess('c', 'crane').reason, 'spectator');
   room.forfeit('b');
   // 2-player duel: forfeit ends the round. Start a 3-way one to check "left" mid-round.
-  room.voteRematch('a');
-  room.voteRematch('b');
+  room.next('a');
   room.forfeit('b');
   assert.equal(room.phase, 'playing');
   const r2 = Object.fromEntries(a.last().members.map((m) => [m.id, m.role]));

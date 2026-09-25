@@ -1,7 +1,7 @@
 /**
  * End-to-end over real HTTP + WebSocket: dev login, two browsers join the
- * same instance, host starts a duel, both guess, one wins, both vote to
- * play again. No Discord or MongoDB involved.
+ * same instance, host starts a duel, both guess, one wins, the host picks a
+ * different mode and starts the next round. No Discord or MongoDB involved.
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -92,7 +92,7 @@ test('token endpoint validates input', async () => {
   assert.equal(res.status, 400);
 });
 
-test('two players play a duel round end to end and rematch', async () => {
+test('two players play a duel round end to end; host starts the next round in another mode', async () => {
   const [a, b] = await Promise.all([devLogin('Alice'), devLogin('Bob')]);
   assert.equal(a.user.name, 'Alice');
   const inst = 'e2e-room';
@@ -138,12 +138,20 @@ test('two players play a duel round end to end and rematch', async () => {
   assert.equal(s.round.secret, secret);
   assert.deepEqual(s.result.winnerIds, [a.user.id]);
   assert.equal(s.score[a.user.id], 1);
-  assert.deepEqual(s.rematch.needed.sort(), [a.user.id, b.user.id].sort());
+  assert.ok(s.next.deadline > s.now, 'next-round deadline announced');
+  assert.equal(s.settings.mode, 'duel', 'next round defaults to the mode just played');
 
-  A.send({ t: 'rematch' });
-  s = await B.wait('state', (m) => m.rematch?.votes.length === 1);
-  B.send({ t: 'rematch' });
-  s = await A.wait('state', (m) => m.phase === 'playing' && m.roundNumber === 2);
+  B.send({ t: 'next' });
+  assert.match((await B.wait('error')).text, /host/);
+
+  A.send({ t: 'settings', mode: 'turn' });
+  s = await B.wait('state', (m) => m.settings.mode === 'turn');
+  assert.equal(s.phase, 'roundOver', 'mode change shows on the result card without starting');
+
+  A.send({ t: 'next' });
+  s = await B.wait('state', (m) => m.phase === 'playing' && m.roundNumber === 2);
+  assert.equal(s.round.kind, 'turn');
+  assert.equal(s.score[a.user.id], 1, 'score carries into round 2');
   assert.notEqual(rooms.get(inst).round.secret, secret);
 
   A.ws.close();

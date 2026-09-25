@@ -2,7 +2,7 @@
  * WebSocket transport between the Activity page and its Room.
  *
  * Browser → server: { t:'settings', mode?, turnsEach? } · { t:'start' } ·
- *                   { t:'guess', word } · { t:'forfeit' } · { t:'rematch' } · { t:'ping' }
+ *                   { t:'guess', word } · { t:'forfeit' } · { t:'next' } (host starts next round) · { t:'ping' }
  * Server → browser: { t:'state', … } (full snapshot) · { t:'guess', ok, … } ·
  *                   { t:'event', kind, text } · { t:'error', text } · { t:'pong' }
  */
@@ -72,8 +72,8 @@ export function attachWebSocket(server, config) {
           case 'forfeit':
             room.forfeit(userId);
             break;
-          case 'rematch':
-            room.voteRematch(userId);
+          case 'next':
+            room.next(userId);
             break;
           default:
             room.send(ws, { t: 'error', text: 'Unknown message.' });

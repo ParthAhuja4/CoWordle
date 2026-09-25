@@ -36,51 +36,48 @@
         <div id="lobby-score" class="pill" hidden></div>
       </header>
 
+      <p id="lobby-role" class="role-banner"></p>
+
       <main class="lobby-body">
         <section class="card">
           <div class="card-head">
-            <h2>Players</h2>
-            <span id="lobby-count" class="count"></span>
+            <h2><span class="step">1</span>Players <span id="lobby-count" class="count"></span></h2>
+            <button id="invite-btn" class="btn btn-ghost btn-sm" hidden>Invite friends</button>
           </div>
           <ul id="lobby-players" class="player-list"></ul>
-          <p class="hint">Friends who open this Activity from the channel join the room automatically.</p>
+          <p class="hint">Anyone in this voice channel can tap the CoWordle activity to join. They show up here automatically.</p>
         </section>
 
         <section class="card">
           <div class="card-head">
-            <h2>Game mode</h2>
-            <span id="mode-lock" class="count" hidden>Host picks</span>
+            <h2><span class="step">2</span>Game mode</h2>
           </div>
           <div id="mode-picker" class="mode-grid" role="radiogroup" aria-label="Game mode">
             <button data-mode="duel" class="mode-card" role="radio" aria-checked="false">
               <span class="mode-icon" aria-hidden="true">⚔️</span>
               <span class="mode-text">
                 <span class="mode-title">Duel</span>
-                <span class="mode-sub">Own board, same word</span>
+                <span class="mode-sub">Same word, own board. Fewest guesses wins.</span>
               </span>
             </button>
             <button data-mode="turn" class="mode-card" role="radio" aria-checked="false">
               <span class="mode-icon" aria-hidden="true">🔁</span>
               <span class="mode-text">
                 <span class="mode-title">Turn-by-Turn</span>
-                <span class="mode-sub">One shared board</span>
+                <span class="mode-sub">One shared board, take turns. First to solve wins.</span>
               </span>
             </button>
           </div>
           <p id="mode-desc" class="desc"></p>
           <div id="turns-row" class="turns-row" hidden>
             <span class="turns-label">Turns per player</span>
-            <div class="seg" id="turns-picker" role="radiogroup" aria-label="Turns per player">
-              <button data-turns="1" class="seg-btn" role="radio" aria-checked="false">1</button>
-              <button data-turns="2" class="seg-btn" role="radio" aria-checked="false">2</button>
-              <button data-turns="3" class="seg-btn" role="radio" aria-checked="false">3</button>
-            </div>
+            <div id="turns-picker"></div>
           </div>
         </section>
       </main>
 
       <footer class="lobby-foot">
-        <button id="start-btn" class="btn btn-primary btn-lg">Start game</button>
+        <button id="start-btn" class="btn btn-primary btn-lg">Start round 1</button>
         <p id="lobby-wait" class="wait" hidden></p>
       </footer>
     </section>

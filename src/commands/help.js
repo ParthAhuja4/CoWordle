@@ -26,7 +26,7 @@ export async function execute(interaction) {
       },
       {
         name: '🕹️ In the game',
-        value: 'The host picks the mode and presses **Start**. Type with the on-screen keys or your keyboard, Enter to guess. After a round, tap **Play again**. `/stats` and `/leaderboard` track your record.',
+        value: 'The first person in is the **host**: they pick the mode and press **Start**. Type with the on-screen keys or your keyboard, Enter to guess. After each round the host picks the mode again and taps **Start round N**; anyone who joined meanwhile plays too. `/stats` and `/leaderboard` track your record.',
       },
     );
   return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });

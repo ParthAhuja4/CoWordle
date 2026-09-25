@@ -9,6 +9,7 @@
  *   - a signed session the browser presents when opening its WebSocket
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { log } from '../util/logger.js';
 
 const API = 'https://discord.com/api/v10';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -67,10 +68,14 @@ export async function exchangeCode({ code, guildId }, config) {
   if (!meRes.ok) throw new Error(`users/@me failed (${meRes.status})`);
   const me = await meRes.json();
 
+  // The guild the Activity runs in, as reported by the Discord client. Stats are
+  // keyed by it, so keep it even if the member lookup below fails.
+  const guild = guildId && /^\d{5,30}$/.test(String(guildId)) ? String(guildId) : null;
   let member = null;
-  if (guildId && /^\d{5,30}$/.test(guildId)) {
-    const mRes = await fetch(`${API}/users/@me/guilds/${guildId}/member`, { headers: { authorization: `Bearer ${access_token}` } });
-    if (mRes.ok) member = { ...(await mRes.json()), guildId };
+  if (guild) {
+    const mRes = await fetch(`${API}/users/@me/guilds/${guild}/member`, { headers: { authorization: `Bearer ${access_token}` } });
+    if (mRes.ok) member = { ...(await mRes.json()), guildId: guild };
+    else log.warn(`guild member lookup failed (${mRes.status}) for user ${me.id} in guild ${guild}; using global name`);
   }
 
   const user = {
@@ -78,7 +83,7 @@ export async function exchangeCode({ code, guildId }, config) {
     name: member?.nick || me.global_name || me.username,
     avatar: avatarUrl(me, member),
   };
-  const session = signSession({ user, guildId: member ? guildId : null, exp: Date.now() + SESSION_TTL_MS }, sessionSecret(config));
+  const session = signSession({ user, guildId: guild, exp: Date.now() + SESSION_TTL_MS }, sessionSecret(config));
   return { access_token, session, user };
 }
 

@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { ANSWERS, ALLOWED, isValidGuess, pickSecret, normalizeWord, isWellFormed } from '../src/game/words.js';
 
 test('word lists are loaded and well formed', () => {
-  assert.ok(ANSWERS.length > 10_000, `answers too small: ${ANSWERS.length}`);
+  // Answers are the curated everyday-word pool (~2.3k); guesses accept the much larger union.
+  assert.ok(ANSWERS.length > 2000, `answers too small: ${ANSWERS.length}`);
+  assert.ok(ANSWERS.length < 5000, `answers pool is not the curated list: ${ANSWERS.length}`);
   assert.ok(ALLOWED.size > 18_000, `allowed too small: ${ALLOWED.size}`);
+  assert.ok(ALLOWED.has('aahed'), 'obscure NYT-accepted words stay valid guesses');
+  assert.ok(!ANSWERS.includes('aahed'), 'but never become the secret');
   for (const w of ANSWERS) assert.match(w, /^[a-z]{5}$/);
   for (const w of ANSWERS) assert.ok(ALLOWED.has(w), `answer ${w} not in allowed set`);
 });

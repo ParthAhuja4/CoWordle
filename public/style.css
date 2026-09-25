@@ -156,9 +156,24 @@ h2, h3, p { margin: 0; }
   padding: 18px;
   box-shadow: var(--shadow);
 }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-.count { font-size: 12px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; min-height: 30px; }
+h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.step {
+  display: grid; place-items: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 800; letter-spacing: 0;
+}
+.count { font-size: 12px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; letter-spacing: 0; text-transform: none; }
+.role-banner {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  font-size: 13.5px; line-height: 1.45; color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.role-banner.host { color: #f4d16a; background: rgba(244, 209, 106, 0.08); border-color: rgba(244, 209, 106, 0.3); }
 
 .player-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .member {
@@ -202,6 +217,7 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
   display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
   text-align: left;
   padding: 14px;
+  min-width: 0;
   border-radius: var(--r-md);
   background: var(--surface-2);
   border: 1px solid var(--line);
@@ -218,7 +234,7 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 .mode-icon { font-size: 22px; line-height: 1; }
 .mode-text { display: flex; flex-direction: column; gap: 2px; }
 .mode-title { font-weight: 700; font-size: 15px; }
-.mode-sub { font-size: 12px; color: var(--muted); }
+.mode-sub { font-size: 12px; color: var(--muted); line-height: 1.35; }
 .mode-card.on .mode-sub { color: #a9d9b5; }
 
 .seg { display: flex; gap: 4px; background: var(--bg); padding: 4px; border-radius: 10px; border: 1px solid var(--line); }
@@ -266,15 +282,17 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 .btn-ghost.armed { color: #ffb3b4; border-color: rgba(237, 66, 69, 0.5); background: var(--danger-soft); }
 
 /* ------------------------------------------------------------------- game */
-.screen-game { gap: 8px; position: relative; max-width: 1040px; }
-.game-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.chips {
-  display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0;
-  overflow-x: auto; scrollbar-width: none; padding: 3px; margin: -3px;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+/* The header, board and keyboard centre vertically as one cluster (justify-content)
+   instead of the board soaking up all spare height and pinning the header to the top. */
+.screen-game {
+  gap: 8px; position: relative; max-width: 1040px;
+  justify-content: center;
+  padding-top: max(20px, calc(env(safe-area-inset-top) + 8px));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
-.chips::-webkit-scrollbar { display: none; }
+.game-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* Every player's score is always visible: chips wrap, nothing scrolls or fades. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--surface);
@@ -282,12 +300,13 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
   border-radius: 999px;
   padding: 3px 10px 3px 3px;
   font-size: 13px; font-weight: 600;
-  max-width: 46vw; flex: none;
+  max-width: 220px; min-width: 0; flex: 0 1 auto;
   transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
 }
-.chip .avatar { width: 24px; height: 24px; font-size: 11px; box-shadow: none; }
-.chip .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip .avatar { width: 24px; height: 24px; font-size: 11px; box-shadow: none; flex: none; }
+.chip .n { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip .s {
+  flex: none;
   font-variant-numeric: tabular-nums; font-weight: 800;
   color: var(--text);
   background: var(--surface-3);
@@ -321,7 +340,7 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 .timer-fill.low { background: linear-gradient(90deg, #c2383b, #ff6b6e); animation: timer-pulse 0.8s ease-in-out infinite; }
 
 /* boards */
-.boards { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; position: relative; padding: 4px 0; }
+.boards { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; position: relative; padding: 0; }
 .board { display: grid; gap: 6px; }
 .row { display: grid; grid-template-columns: repeat(5, var(--tile)); gap: 6px; align-items: center; }
 .row.shake { animation: shake 0.45s; }
@@ -381,14 +400,17 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 /* result overlay */
 .overlay {
   position: fixed; inset: 0; z-index: 20;
-  display: grid; place-items: center;
-  padding: 16px;
+  display: flex; flex-direction: column; align-items: center;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
   background: rgba(8, 9, 13, 0.6);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   animation: fade 0.2s ease both;
 }
+/* Auto margins centre the card when it fits and fall back to top-aligned + scroll when it doesn't. */
 .result {
+  margin: auto 0; flex: none;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: 22px;
@@ -427,17 +449,18 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 .scoreboard .srow .ss { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 16px; }
 .scoreboard .srow.draws { color: var(--faint); font-weight: 500; font-size: 12.5px; justify-content: center; padding-top: 2px; }
 .result .sub { color: var(--muted); font-size: 13px; }
-.result .votes { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
-.result .votes .v {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: var(--muted);
-  border: 1px solid var(--line); border-radius: 999px;
-  padding: 3px 10px 3px 3px;
-  transition: border-color 0.2s, color 0.2s;
+/* "Next round" section: host picks the mode and starts; others watch the choice. */
+.result .next {
+  display: flex; flex-direction: column; gap: 10px;
+  padding-top: 14px; border-top: 1px solid var(--line);
 }
-.result .votes .v .avatar { width: 20px; height: 20px; font-size: 10px; box-shadow: none; opacity: 0.7; }
-.result .votes .v.yes { color: #9ad8a8; border-color: rgba(79, 165, 101, 0.5); background: var(--g-soft); }
-.result .votes .v.yes .avatar { opacity: 1; }
+.result .next-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.result .seg { width: 100%; }
+.result .seg-btn { padding: 10px; }
+.result .next-turns { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.result .next-turns .seg { width: 150px; }
+.result .next .btn-lg { margin-top: 4px; max-width: none; }
+.result .next .wait { justify-content: center; text-align: left; }
 .result .countdown { margin-top: 12px; font-size: 12.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
 /* keyboard */
@@ -494,7 +517,7 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
 /* ------------------------------------------------------------- responsive */
 /* Wide screens (Discord desktop): rivals' boards sit beside yours instead of below. */
 @media (min-width: 700px) {
-  :root { --tile: min(11.5vw, 7.5vh, 62px); --mini: min(3.6vw, 2.2vh, 17px); }
+  :root { --tile: min(11.5vw, 7vh, 62px); --mini: min(3.6vw, 2.2vh, 17px); }
   .boards { flex-direction: row; justify-content: center; align-items: flex-start; gap: 40px; }
   .others { flex-direction: column; align-items: stretch; }
   .other { flex-direction: row; gap: 12px; }
@@ -503,16 +526,30 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
   .other .mini { order: -1; }
   .key { --kw: 44px; }
 }
-/* Phones: everything must fit without scrolling, so rivals' boards become a compact strip. */
+/* Phones: everything must fit without scrolling, so rivals' boards become a compact strip.
+   Vertical budget on a 375×667 phone (measured): padding 32 + header 47 + status 22 + timer 4
+   + own board 245 + rival strip ≈97 + keyboard 148 + footer 27 + gaps ≈ 650. */
 @media (max-width: 699px) {
-  :root { --tile: min(11vw, 7.5vh, 62px); --mini: min(3.4vw, 1.9vh, 15px); }
-  .screen-game { gap: 6px; padding-left: 12px; padding-right: 12px; }
-  .boards { gap: 10px; }
-  .others { gap: 8px; }
-  .other { flex-direction: row; gap: 10px; padding: 6px 10px; }
-  .other-text { align-items: flex-start; }
-  .other .oname { max-width: 92px; }
-  .key { --kw: calc((100vw - 24px - 9 * 5px) / 10); height: 48px; font-size: 14px; }
+  :root { --tile: min(11vw, 5.5vh, 62px); --mini: min(2.4vw, 1.3vh, 12px); }
+  .screen-game { gap: 4px; padding-left: 12px; padding-right: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  /* Round label as a centred caption, score chips wrapped underneath. */
+  .game-head { flex-direction: column-reverse; align-items: center; gap: 4px; }
+  .chips { width: 100%; justify-content: center; gap: 5px; }
+  .chip { max-width: calc(50% - 3px); padding: 2px 8px 2px 2px; font-size: 12px; }
+  .chip .avatar { width: 20px; height: 20px; font-size: 10px; }
+  .chips.many .chip { max-width: none; }
+  .chips.many .chip .n { display: none; }
+  .status { min-height: 22px; font-size: 13.5px; }
+  .timer { height: 4px; }
+  .boards { gap: 8px; }
+  .board, .row, .turn-row { gap: 5px; }
+  .others { flex-wrap: nowrap; gap: 6px; max-width: 100%; }
+  .other { flex-direction: column; gap: 3px; padding: 5px 7px; min-width: 0; }
+  .other-text { flex-direction: row; align-items: baseline; gap: 4px; }
+  .other .oname { max-width: 64px; font-size: 11px; }
+  .other .ostat { font-size: 10px; }
+  .key { --kw: calc((100vw - 24px - 9 * 5px) / 10); height: 44px; font-size: 14px; }
+  .keyboard { gap: 6px; padding-top: 4px; }
   .card { padding: 16px; }
   .member { padding: 6px 10px; }
   .member.empty { padding: 4px 10px; }
@@ -520,10 +557,19 @@ h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacin
   .hint { margin-top: 10px; }
   .lobby-foot { padding-top: 12px; }
   .game-foot { min-height: 0; padding-top: 0; }
-  .btn-sm { padding: 6px 12px; font-size: 12.5px; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  /* Result card compaction so the taller card (with the next-round picker) fits. */
+  .result { padding: 18px 16px 16px; border-radius: 18px; }
+  .result-emoji { font-size: 32px; margin-bottom: 6px; }
+  .result h3 { font-size: 20px; }
+  .result .word { margin: 10px 0 12px; }
+  .result .word span { width: 34px; height: 34px; font-size: 17px; }
+  .scoreboard { margin-bottom: 12px; gap: 2px; }
+  .scoreboard .srow { padding: 4px 8px; font-size: 13.5px; }
+  .scoreboard .srow .avatar { width: 22px; height: 22px; }
 }
 @media (max-height: 640px) {
-  :root { --tile: min(11vw, 7vh, 50px); }
-  .key { height: 42px; }
+  :root { --tile: min(11vw, 5.2vh, 50px); }
+  .key { height: 40px; }
   .boards { gap: 8px; }
 }
