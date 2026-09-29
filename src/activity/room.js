@@ -31,6 +31,15 @@ import { pickSecret, normalizeWord, isWellFormed, isValidGuess } from '../game/w
 import { keyboardState } from '../game/scoring.js';
 import { createTurnRound, applyTurnGuess, applyTurnTimeout, forfeitTurn, currentTurnUser } from '../game/turnGame.js';
 import { createDuelRound, applyDuelGuess, applyDuelTimeout, forfeitDuel, boardDone, bestSolve } from '../game/duelGame.js';
+import { isPoopleWord, pickStart, distanceToPoop, optimalPath } from '../game/poopleWords.js';
+import {
+  createPoopleRound,
+  applyPoopleStep,
+  closePoopleWindow,
+  forfeitPoople,
+  lastWord,
+  boardDone as poopleBoardDone,
+} from '../game/poopleGame.js';
 import { scheduleGuarded, clearTimer } from '../util/timers.js';
 
 const noopLog = { info() {}, warn() {}, error() {} };
@@ -202,6 +211,16 @@ export class Room {
     this.participants = [...playerIds];
     for (const id of playerIds) this.score[id] ??= 0;
 
+    if (this.settings.mode === 'poople') {
+      // No clock until somebody reaches the target; see armPoopleWindow.
+      const start = pickStart(this.usedSecrets);
+      this.round = createPoopleRound({ start, par: distanceToPoop(start), path: optimalPath(start), playerIds });
+      const { target, par } = this.round;
+      this.event('round', `Round ${this.roundNumber} — ${start.toUpperCase()} → ${target.toUpperCase()}, par ${par}. Go!`);
+      this.broadcast();
+      return;
+    }
+
     const secret = pickSecret(this.usedSecrets);
     if (this.settings.mode === 'turn') {
       this.round = createTurnRound({ secret, order: playerIds, turnsEach: this.settings.turnsEach, startIdx: this.roundNumber - 1 });
@@ -248,11 +267,31 @@ export class Room {
     );
   }
 
+  /** Opens the Poople finish window once the first player reaches the target. */
+  armPoopleWindow() {
+    const round = this.round;
+    clearTimer(round);
+    if (round.status !== 'playing') return;
+    round.deadline = Date.now() + this.turnMs();
+    round.timer = scheduleGuarded(
+      this.turnMs(),
+      () => !this.destroyed && this.round === round && round.status === 'playing',
+      () => this.onPoopleWindowClosed(round),
+    );
+  }
+
   clearRoundTimers() {
     const r = this.round;
     if (!r) return;
-    if (r.kind === 'turn') clearTimer(r);
+    if (r.kind === 'turn' || r.kind === 'poople') clearTimer(r);
     else for (const b of Object.values(r.boards)) clearTimer(b);
+  }
+
+  onPoopleWindowClosed(round) {
+    const result = closePoopleWindow(round);
+    if (result === null) return;
+    this.event('timeout', 'Time is up');
+    this.afterMutation(result !== 'pending');
   }
 
   onTurnTimeout(round, userId) {
@@ -283,6 +322,7 @@ export class Room {
     const round = this.round;
     if (this.phase !== 'playing' || !round) return { ok: false, reason: 'not_playing', message: 'No round in progress.' };
     if (!this.participants.includes(userId)) return { ok: false, reason: 'spectator', message: 'You are watching this round. You join the next one.' };
+    if (round.kind === 'poople') return this.poopleStep(userId, word);
     if (!isWellFormed(word)) return { ok: false, reason: 'malformed', message: 'Five letters, please.' };
     if (!isValidGuess(word)) return { ok: false, reason: 'not_a_word', message: 'Not in word list' };
 
@@ -318,6 +358,35 @@ export class Room {
     return { ok: true, pattern: res.pattern, word };
   }
 
+  /** One Poople step: `word` replaces the last word in the player's ladder. */
+  poopleStep(userId, word) {
+    const round = this.round;
+    if (!/^[a-z]{4}$/.test(word)) return { ok: false, reason: 'malformed', message: 'Four letters, please.' };
+    if (!isPoopleWord(word)) return { ok: false, reason: 'not_a_word', message: 'Not in word list' };
+
+    const board = round.boards[userId];
+    const res = applyPoopleStep(round, userId, word);
+    if (!res.ok) {
+      const message =
+        {
+          not_one_letter: board ? `Change exactly one letter of ${lastWord(round, board).toUpperCase()}` : '',
+          arrived: `You reached ${round.target.toUpperCase()} — waiting for the others.`,
+          forfeited: 'You left this round.',
+          not_in_round: 'You are not in this round.',
+        }[res.reason] || 'The round is over.';
+      return { ok: false, reason: res.reason, message };
+    }
+    const ended = res.result !== 'pending';
+    if (ended) this.clearRoundTimers();
+    else if (res.firstArrival) this.armPoopleWindow();
+    if (res.arrived && !ended) {
+      const text = `${this.name(userId)} reached ${round.target.toUpperCase()} in ${res.steps} step${res.steps === 1 ? '' : 's'}`;
+      this.event('arrive', res.firstArrival ? `${text} — ${this.settings.turnSeconds}s to beat it` : text);
+    }
+    this.afterMutation(ended);
+    return { ok: true, word, arrived: res.arrived };
+  }
+
   afterMutation(ended) {
     if (ended && this.round && this.round.status !== 'playing' && this.phase === 'playing') this.endRound();
     else this.broadcast();
@@ -329,7 +398,7 @@ export class Room {
     if (this.phase !== 'playing' || !this.round) return this.fail(userId, 'No round in progress.');
     if (!this.participants.includes(userId) || this.forfeited.has(userId)) return this.fail(userId, 'You are not playing this round.');
     const round = this.round;
-    const result = round.kind === 'turn' ? forfeitTurn(round, userId) : forfeitDuel(round, userId);
+    const result = round.kind === 'turn' ? forfeitTurn(round, userId) : round.kind === 'poople' ? forfeitPoople(round, userId) : forfeitDuel(round, userId);
     if (result === null) return this.fail(userId, 'You cannot forfeit now.');
     this.forfeited.add(userId);
     if (round.kind === 'turn' && result === 'continue') this.armTurnTimer();
@@ -348,14 +417,28 @@ export class Room {
     this.clearRoundTimers();
     this.phase = 'roundOver';
     this.roundsPlayed += 1;
-    this.usedSecrets.add(round.secret);
+    const poople = round.kind === 'poople';
+    // Poople start words are 4 letters, so they can share the set with 5-letter secrets.
+    const word = poople ? round.start : round.secret;
+    this.usedSecrets.add(word);
 
     const winnerIds = round.kind === 'turn' ? (round.winnerId ? [round.winnerId] : []) : [...round.winnerIds];
     if (winnerIds.length === 1) this.score[winnerIds[0]] = (this.score[winnerIds[0]] ?? 0) + 1;
     else this.score.draws += 1;
 
     const result = this.forfeited.size && winnerIds.length ? 'forfeit' : round.status === 'tie' ? 'tie' : winnerIds.length ? 'win' : 'draw';
-    this.lastResult = { winnerIds, result, secret: round.secret };
+    this.lastResult = poople
+      ? {
+          winnerIds,
+          result,
+          kind: 'poople',
+          start: round.start,
+          target: round.target,
+          par: round.par,
+          path: round.path,
+          steps: Object.fromEntries(Object.entries(round.boards).map(([id, b]) => [id, b.arrivedAt])),
+        }
+      : { winnerIds, result, secret: round.secret };
 
     if (this.stats && this.guildId) {
       this.stats
@@ -366,7 +449,7 @@ export class Room {
           playerIds: this.participants,
           winnerIds,
           result,
-          secret: round.secret,
+          secret: word,
         })
         .then(() => this.log.info(`stats: recorded round ${this.roundNumber} of ${this.id} (guild ${this.guildId}, ${result})`))
         .catch((err) => this.log.error('recordRoundResult failed:', err));
@@ -376,10 +459,14 @@ export class Room {
 
     const text =
       winnerIds.length === 1
-        ? `${this.name(winnerIds[0])} wins round ${this.roundNumber}!`
+        ? poople && round.boards[winnerIds[0]].arrivedAt !== null
+          ? `${this.name(winnerIds[0])} wins round ${this.roundNumber} in ${round.boards[winnerIds[0]].arrivedAt} steps (par ${round.par})!`
+          : `${this.name(winnerIds[0])} wins round ${this.roundNumber}!`
         : winnerIds.length > 1
           ? `Tie between ${winnerIds.map((id) => this.name(id)).join(' and ')}`
-          : `Nobody got it — the word was ${round.secret.toUpperCase()}`;
+          : poople
+            ? `Nobody reached ${round.target.toUpperCase()}`
+            : `Nobody got it — the word was ${round.secret.toUpperCase()}`;
     this.event('result', text);
 
     // Drop participants who already disconnected; they are simply gone.
@@ -470,9 +557,38 @@ export class Room {
     if (!round || this.phase === 'lobby') return snap;
     const over = round.status !== 'playing';
 
+    if (round.kind === 'poople') {
+      const boards = {};
+      for (const [id, b] of Object.entries(round.boards)) {
+        boards[id] = {
+          // Rivals see how many steps you have taken, and your words only once the round is over.
+          steps: id === viewerId || over ? [...b.steps] : null,
+          count: b.steps.length,
+          arrivedAt: b.arrivedAt,
+          forfeited: b.forfeited,
+          done: poopleBoardDone(b),
+        };
+      }
+      snap.round = {
+        kind: 'poople',
+        wordLen: round.start.length,
+        status: round.status,
+        start: round.start,
+        target: round.target,
+        par: round.par,
+        path: over ? round.path : null,
+        bestSteps: round.bestSteps,
+        deadline: over ? null : round.deadline,
+        winnerIds: round.winnerIds,
+        boards,
+      };
+      return snap;
+    }
+
     if (round.kind === 'turn') {
       snap.round = {
         kind: 'turn',
+        wordLen: round.secret.length,
         status: round.status,
         secret: over ? round.secret : null,
         maxRows: round.maxRows,
@@ -503,6 +619,7 @@ export class Room {
     }
     snap.round = {
       kind: 'duel',
+      wordLen: round.secret.length,
       status: round.status,
       secret: over ? round.secret : null,
       maxRows: round.maxRows,

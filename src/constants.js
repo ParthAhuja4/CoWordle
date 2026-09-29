@@ -22,6 +22,14 @@ export const ROOM_EMPTY_TTL_MS = 60_000;
 export const MODES = {
   duel: { key: 'duel', label: 'Duel' },
   turn: { key: 'turn', label: 'Turn-by-Turn' },
+  poople: { key: 'poople', label: 'Poople' },
 };
+
+/** Poople: change one letter at a time to get from a random start word to the target. */
+export const POOPLE_TARGET = 'poop';
+export const POOPLE_LEN = 4;
+/** Start words are picked so the shortest path (par) is within this range. */
+export const POOPLE_PAR_MIN = 3;
+export const POOPLE_PAR_MAX = 6;
 
 export const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');

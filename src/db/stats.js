@@ -22,7 +22,7 @@ export class StatsRepo {
    * @param {object} p
    * @param {string} p.guildId
    * @param {string} p.matchId
-   * @param {'turn'|'duel'} p.mode
+   * @param {'turn'|'duel'|'poople'} p.mode
    * @param {string[]} p.playerIds  everyone who took part in the round
    * @param {string[]} p.winnerIds  [] for draw; >1 for tie
    * @param {'win'|'tie'|'draw'|'forfeit'} p.result

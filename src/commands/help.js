@@ -25,6 +25,10 @@ export async function execute(interaction) {
         value: `One shared board. Take turns (${s}s each by default, 2 turns per player by default). Every guess helps everyone. First to solve wins; a full board is a draw.`,
       },
       {
+        name: '💩 Poople',
+        value: `A word ladder: everyone starts from the same **4-letter word** and changes one letter at a time, always making a real word, until they reach **POOP**. Par (the shortest possible path) is shown up front. No clock until someone arrives; then the rest get ${s}s by default to match or beat their step count. Fewest steps wins · same = tie. Every step counts, including going back to an earlier word.`,
+      },
+      {
         name: '🕹️ In the game',
         value: 'The first person in is the **host**: they pick the mode, the seconds per turn and press **Start**. Type with the on-screen keys or your keyboard, Enter to guess. After each round the host picks the settings again and taps **Start round N**; anyone who joined meanwhile plays too. `/stats` and `/leaderboard` track your record.',
       },

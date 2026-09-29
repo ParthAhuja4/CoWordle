@@ -223,6 +223,8 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
 .desc { color: var(--muted); font-size: 13.5px; margin-top: 12px; line-height: 1.5; }
 
 .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* An odd card out (Poople, the third mode) spans the full row instead of leaving a hole. */
+.mode-grid > .mode-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .mode-card {
   position: relative;
   display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
@@ -380,7 +382,7 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
 /* boards */
 .boards { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; position: relative; padding: 0; }
 .board { display: grid; gap: 6px; }
-.row { display: grid; grid-template-columns: repeat(5, var(--tile)); gap: 6px; align-items: center; }
+.row { display: grid; grid-template-columns: repeat(var(--cols, 5), var(--tile)); gap: 6px; align-items: center; }
 .row.shake { animation: shake 0.45s; }
 .tile {
   width: var(--tile); height: var(--tile);
@@ -400,7 +402,7 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
 .tile.timed { border-style: dashed; border-color: var(--line-strong); color: var(--faint); font-size: calc(var(--tile) * 0.35); background: transparent; }
 .tile.flip { animation: flip 0.55s ease both; }
 
-.turn-row { display: grid; grid-template-columns: repeat(5, var(--tile)) auto; gap: 6px; align-items: center; }
+.turn-row { display: grid; grid-template-columns: repeat(var(--cols, 5), var(--tile)) auto; gap: 6px; align-items: center; }
 .turn-row .who {
   font-size: 12px; font-weight: 500; color: var(--faint);
   padding-left: 8px; max-width: 26vw;
@@ -421,7 +423,7 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
   border: 1px solid var(--line);
 }
 .mini { display: grid; gap: 3px; }
-.mini .mrow { display: grid; grid-template-columns: repeat(5, var(--mini)); gap: 3px; }
+.mini .mrow { display: grid; grid-template-columns: repeat(var(--cols, 5), var(--mini)); gap: 3px; }
 .mtile { width: var(--mini); height: var(--mini); border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line); }
 .mtile.g { background: var(--g); border-color: transparent; }
 .mtile.y { background: var(--y); border-color: transparent; }
@@ -434,6 +436,29 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
 .other.done .oname { color: #9ad8a8; }
 .other.done .ostat { color: var(--g); }
 .other.left { opacity: 0.5; }
+
+/* Poople: your ladder of 4-letter words, and each rival's step count. */
+.poople { --cols: 4; }
+.ladder-head { display: flex; align-items: center; gap: 10px; }
+.ladder-title { font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; }
+.ladder-par { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Same height as a six-row Wordle board; longer ladders scroll (kept at the bottom by main.js). */
+.ladder {
+  display: grid; gap: 6px; align-content: start;
+  max-height: calc(var(--tile) * 6 + 5 * 6px);
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 2px 0;
+}
+.ladder::-webkit-scrollbar { display: none; }
+/* Step number on the left, balanced by a right margin so the tiles stay centred. */
+.ladder-row { grid-template-columns: 24px repeat(var(--cols), var(--tile)); margin-right: 30px; }
+.ladder-row .num { font-size: 12px; font-weight: 600; color: var(--faint); text-align: right; padding-right: 2px; font-variant-numeric: tabular-nums; }
+.tile.chg { border-color: var(--accent-hi); box-shadow: 0 0 0 2px rgba(109, 120, 245, 0.35), 0 4px 10px rgba(0, 0, 0, 0.25); }
+.tile.ghost { border-style: dashed; color: var(--faint); background: transparent; }
+.ocount { font-size: 20px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; min-width: 24px; text-align: center; }
+.other.done .ocount { color: var(--g); }
+.oladder { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; max-width: 200px; line-height: 1.35; }
 
 /* result overlay */
 .overlay {
@@ -486,6 +511,14 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
 .scoreboard .srow .sn { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scoreboard .srow .ss { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 16px; }
 .scoreboard .srow.draws { color: var(--faint); font-weight: 500; font-size: 12.5px; justify-content: center; padding-top: 2px; }
+.scoreboard .srow .st { font-size: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+/* Poople result: steps vs par, then one shortest path as word pills. */
+.poople-result { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 8px 0 14px; }
+.path-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint); margin-top: 4px; }
+.path { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 6px; }
+.path .pw { padding: 4px 8px; border-radius: 6px; background: var(--surface-3); font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; }
+.path .pw.end { background: linear-gradient(180deg, #5cb372, var(--g-deep)); color: #fff; }
+.path .arr { color: var(--faint); font-size: 12px; }
 .result .sub { color: var(--muted); font-size: 13px; }
 /* "Next round" section: host picks the mode and starts; others watch the choice. */
 .result .next {
@@ -582,7 +615,8 @@ h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight:
   .status { min-height: 22px; font-size: 13.5px; }
   .timer { height: 4px; }
   .boards { gap: 8px; }
-  .board, .row, .turn-row { gap: 5px; }
+  .board, .row, .turn-row, .ladder { gap: 5px; }
+  .ladder { max-height: calc(var(--tile) * 6 + 5 * 5px); }
   .others { flex-wrap: nowrap; gap: 6px; max-width: 100%; }
   .other { flex-direction: column; gap: 3px; padding: 5px 7px; min-width: 0; }
   .other-text { flex-direction: row; align-items: baseline; gap: 4px; }

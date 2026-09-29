@@ -4,12 +4,13 @@ import { WORD_LEN } from '../constants.js';
 
 const WORD_RE = new RegExp(`^[a-z]{${WORD_LEN}}$`);
 
-function loadList(relPath) {
+/** Reads a one-word-per-line file (path relative to this module), keeping only words matching `re`. */
+export function loadList(relPath, re = WORD_RE) {
   const text = readFileSync(new URL(relPath, import.meta.url), 'utf8');
   return text
     .split('\n')
     .map((w) => w.trim().toLowerCase())
-    .filter((w) => WORD_RE.test(w));
+    .filter((w) => re.test(w));
 }
 
 /** Secret-word pool. */

@@ -72,7 +72,7 @@ function assertHostGotRoundOver(room, hostSocket, hostId, expected = {}) {
   const eventTexts = hostSocket.messages.filter((m) => m.t === 'event' && m.kind === 'result').map((m) => m.text);
   assert.equal(eventTexts.length, 1, 'exactly one result event delivered to the host');
   // What the result card needs to draw the mode / turns / seconds pickers and the Start button.
-  assert.ok(['duel', 'turn'].includes(snap.settings.mode));
+  assert.ok(['duel', 'turn', 'poople'].includes(snap.settings.mode));
   assert.ok(Number.isInteger(snap.settings.turnsEach) && snap.settings.turnsEach >= 1);
   assert.ok(Number.isInteger(snap.settings.turnSeconds) && snap.settings.turnSeconds >= 10);
   assert.ok(Array.isArray(snap.settings.turnSecondsOptions) && snap.settings.turnSecondsOptions.length > 0);

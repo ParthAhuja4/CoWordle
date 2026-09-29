@@ -13,8 +13,12 @@ const params = new URLSearchParams(location.search);
 // Inside Discord the page is served through the Activity proxy with a root ("/")
 // URL mapping, so relative paths reach our server unchanged. Same locally.
 const BASE = '';
-const WORD_LEN = 5;
 const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+/** Letters per word in the current round (Wordle modes 5, Poople 4). */
+function wordLen(snap = state.snap) {
+  return snap?.round?.wordLen ?? 5;
+}
 
 const state = {
   sdk: null, // DiscordSDK instance (null under dev login)
@@ -235,11 +239,14 @@ function scoreText(snap) {
 const MODE_DESC = {
   duel: 'Everyone gets the same word on their own board. You see your rivals’ colours, never their letters. Fewest guesses wins.',
   turn: 'One board for everyone. Take turns guessing; every guess helps the next player. First to solve it wins.',
+  poople: 'Everyone starts from the same word. Change one letter at a time, always making a real word, until you reach POOP. Fewest steps wins.',
 };
 const MODE_OPTIONS = [
   { value: 'duel', label: 'Duel' },
   { value: 'turn', label: 'Turn-by-Turn' },
+  { value: 'poople', label: 'Poople' },
 ];
+const MODE_LABEL = Object.fromEntries(MODE_OPTIONS.map((o) => [o.value, o.label]));
 const TURN_OPTIONS = [1, 2, 3].map((n) => ({ value: n, label: String(n) }));
 
 /** Seconds-per-turn presets from the server, plus the current value if it is not one of them. */
@@ -250,19 +257,26 @@ function secondsOptions(snap) {
   return opts.map((s) => ({ value: s, label: `${s}s` }));
 }
 
+/** What the host-picked seconds mean in each mode. */
+function secondsLabel(mode) {
+  return mode === 'turn' ? 'Seconds per turn' : mode === 'poople' ? 'Seconds to finish after the first arrival' : 'Seconds per guess';
+}
+
 function secondsPicker(snap, isHost) {
   return segmented({
     options: secondsOptions(snap),
     current: snap.settings.turnSeconds,
     disabled: !isHost,
-    label: 'Seconds per turn',
+    label: secondsLabel(snap.settings.mode),
     onPick: (turnSeconds) => send({ t: 'settings', turnSeconds }),
   });
 }
 
 function modeSummary(snap) {
   const s = snap.settings;
-  return s.mode === 'turn' ? `Turn-by-Turn · ${s.turnsEach} turn${s.turnsEach === 1 ? '' : 's'} each · ${s.turnSeconds}s per turn` : `Duel · ${s.turnSeconds}s per guess`;
+  if (s.mode === 'turn') return `Turn-by-Turn · ${s.turnsEach} turn${s.turnsEach === 1 ? '' : 's'} each · ${s.turnSeconds}s per turn`;
+  if (s.mode === 'poople') return `Poople · ${s.turnSeconds}s to finish after the first arrival`;
+  return `Duel · ${s.turnSeconds}s per guess`;
 }
 
 /**
@@ -345,7 +359,10 @@ function renderLobby(snap) {
     b.setAttribute('aria-checked', String(on));
     b.disabled = !isHost;
   }
-  $('#mode-desc').textContent = MODE_DESC[snap.settings.mode] + ` ${snap.settings.turnSeconds}s per ${snap.settings.mode === 'turn' ? 'turn' : 'guess'}.`;
+  const secs = snap.settings.turnSeconds;
+  $('#mode-desc').textContent =
+    MODE_DESC[snap.settings.mode] +
+    (snap.settings.mode === 'poople' ? ` Once someone arrives, the rest get ${secs}s to match or beat them.` : ` ${secs}s per ${snap.settings.mode === 'turn' ? 'turn' : 'guess'}.`);
   const turnsRow = $('#turns-row');
   turnsRow.hidden = snap.settings.mode !== 'turn';
   $('#turns-picker').replaceChildren(
@@ -357,7 +374,7 @@ function renderLobby(snap) {
       onPick: (turnsEach) => send({ t: 'settings', turnsEach }),
     }),
   );
-  $('#secs-label').textContent = snap.settings.mode === 'turn' ? 'Seconds per turn' : 'Seconds per guess';
+  $('#secs-label').textContent = secondsLabel(snap.settings.mode);
   $('#secs-picker').replaceChildren(secondsPicker(snap, isHost));
 
   const enough = snap.members.length >= snap.settings.minPlayers;
@@ -408,7 +425,8 @@ function canGuess(snap) {
 
 function myDeadline(snap) {
   if (!snap.round || snap.phase !== 'playing') return null;
-  if (snap.round.kind === 'turn') return snap.round.deadline;
+  // Poople has one round-wide finish window, set once somebody arrives.
+  if (snap.round.kind === 'turn' || snap.round.kind === 'poople') return snap.round.deadline;
   return snap.round.boards[snap.me]?.deadline ?? null;
 }
 
@@ -425,7 +443,7 @@ function renderGame(snap) {
       const m = member(snap, id);
       const c = document.createElement('div');
       const isTurn = playing && round?.kind === 'turn' && round.turnUserId === id;
-      const isDone = round?.kind === 'duel' && round.boards[id]?.solvedAt != null;
+      const isDone = (round?.kind === 'duel' && round.boards[id]?.solvedAt != null) || (round?.kind === 'poople' && round.boards[id]?.arrivedAt != null);
       c.className = 'chip' + (id === snap.me ? ' me' : '') + (m.role === 'left' ? ' left' : '') + (isTurn ? ' turn' : '') + (isDone ? ' done' : '');
       c.appendChild(avatarEl(m));
       const n = document.createElement('span');
@@ -438,7 +456,7 @@ function renderGame(snap) {
       return c;
     }),
   );
-  $('#round-label').textContent = `Round ${snap.roundNumber} · ${round?.kind === 'turn' ? 'Turn-by-Turn' : 'Duel'}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
+  $('#round-label').textContent = `Round ${snap.roundNumber} · ${MODE_LABEL[round?.kind] ?? 'Duel'}${snap.score.draws ? ` · ${snap.score.draws} draw${snap.score.draws === 1 ? '' : 's'}` : ''}`;
 
   // Status line
   const status = $('#status');
@@ -447,7 +465,10 @@ function renderGame(snap) {
 
   // Boards
   const boards = $('#boards');
-  boards.replaceChildren(round.kind === 'turn' ? renderTurnBoard(snap) : renderDuelBoards(snap));
+  boards.replaceChildren(round.kind === 'turn' ? renderTurnBoard(snap) : round.kind === 'poople' ? renderPoopleBoards(snap) : renderDuelBoards(snap));
+  // Keep the newest step (and the row being typed) in view on a long ladder.
+  const ladder = boards.querySelector('.ladder');
+  if (ladder) ladder.scrollTop = ladder.scrollHeight;
 
   // Overlay
   const overlay = $('#overlay');
@@ -482,6 +503,14 @@ function statusHtml(snap) {
     if (r.turnUserId === snap.me) return `<b>Your turn</b> · ${r.maxRows - r.rows.length} row${r.maxRows - r.rows.length === 1 ? '' : 's'} left`;
     return `Waiting for <b>${esc(member(snap, r.turnUserId).name)}</b>…`;
   }
+  if (r.kind === 'poople') {
+    const b = r.boards[snap.me];
+    const target = r.target.toUpperCase();
+    if (b.arrivedAt !== null) return `<b>Reached ${target} in ${b.arrivedAt}!</b> Waiting for the others…`;
+    if (r.bestSteps !== null) return `Someone reached ${target} in <b>${r.bestSteps}</b> — match or beat it`;
+    const last = (b.steps.at(-1) ?? r.start).toUpperCase();
+    return `Change one letter of <b>${last}</b> · par ${r.par}`;
+  }
   const b = r.boards[snap.me];
   if (b.solvedAt !== null) return `<b>Solved in ${b.solvedAt}!</b> Waiting for the others…`;
   if (b.out) return 'Out of guesses. Waiting for the others…';
@@ -495,7 +524,7 @@ function statusHtml(snap) {
 function tileRow(row, { typed = '', flip = false, timedLabel = '⏱' } = {}) {
   const el = document.createElement('div');
   el.className = 'row';
-  for (let i = 0; i < WORD_LEN; i++) {
+  for (let i = 0; i < wordLen(); i++) {
     const t = document.createElement('div');
     let cls = 'tile';
     if (row?.timedOut) {
@@ -573,7 +602,7 @@ function miniBoard(snap, id, b) {
     const row = b.rows[i];
     const mr = document.createElement('div');
     mr.className = 'mrow';
-    for (let j = 0; j < WORD_LEN; j++) {
+    for (let j = 0; j < wordLen(snap); j++) {
       const t = document.createElement('div');
       t.className = 'mtile' + (row?.timedOut ? ' timed' : row?.pattern ? ` ${row.pattern[j]}` : '');
       mr.appendChild(t);
@@ -615,6 +644,119 @@ function renderTurnBoard(snap) {
   return board;
 }
 
+/**
+ * One rung of a Poople ladder. Letters already matching the target are green,
+ * and the letter changed from the previous word is outlined (as on poople.io).
+ */
+function ladderRow(word, { prev = null, target = '', num = '', typed = '', ghost = false, flip = false } = {}) {
+  const el = document.createElement('div');
+  el.className = 'row ladder-row';
+  const n = document.createElement('span');
+  n.className = 'num';
+  n.textContent = num;
+  el.appendChild(n);
+  for (let i = 0; i < wordLen(); i++) {
+    const t = document.createElement('div');
+    let cls = 'tile';
+    if (ghost) {
+      cls += ' ghost';
+      t.textContent = word[i];
+    } else if (word) {
+      cls += word[i] === target[i] ? ' g' : ' x';
+      if (prev && prev[i] !== word[i]) cls += ' chg';
+      if (flip) {
+        cls += ' flip';
+        t.style.animationDelay = `${i * 90}ms`;
+      }
+      t.textContent = word[i];
+    } else if (typed[i]) {
+      cls += ' typed';
+      t.textContent = typed[i];
+    }
+    t.className = cls;
+    el.appendChild(t);
+  }
+  return el;
+}
+
+function renderPoopleBoards(snap) {
+  const r = snap.round;
+  const wrap = document.createElement('div');
+  wrap.className = 'mine-wrap poople';
+
+  const mine = r.boards[snap.me];
+  if (mine) {
+    const head = document.createElement('div');
+    head.className = 'ladder-head';
+    const title = document.createElement('span');
+    title.className = 'ladder-title';
+    title.textContent = `${r.start} → ${r.target}`;
+    const par = document.createElement('span');
+    par.className = 'ladder-par';
+    par.textContent = `Par ${r.par} · ${mine.count} step${mine.count === 1 ? '' : 's'}`;
+    head.append(title, par);
+
+    const ladder = document.createElement('div');
+    ladder.className = 'ladder';
+    const seen = newRowsFrom(`poople:${snap.roundNumber}:me`, mine.steps.length);
+    ladder.appendChild(ladderRow(r.start, { target: r.target }));
+    mine.steps.forEach((w, i) => {
+      ladder.appendChild(ladderRow(w, { prev: i ? mine.steps[i - 1] : r.start, target: r.target, num: String(i + 1), flip: i >= seen }));
+    });
+    const typing = canGuess(snap);
+    if (typing) {
+      const row = ladderRow('', { typed: state.typed, num: String(mine.steps.length + 1) });
+      if (state.shakeRow) row.classList.add('shake');
+      ladder.appendChild(row);
+    }
+    if (mine.arrivedAt === null) ladder.appendChild(ladderRow(r.target, { ghost: true }));
+    wrap.append(head, ladder);
+  } else {
+    const lbl = document.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = `Spectating · ${r.start} → ${r.target} · par ${r.par}`;
+    wrap.appendChild(lbl);
+  }
+
+  const others = document.createElement('div');
+  others.className = 'others';
+  for (const [id, b] of Object.entries(r.boards)) {
+    if (id === snap.me) continue;
+    others.appendChild(poopleCard(snap, id, b));
+  }
+  const container = document.createElement('div');
+  container.style.display = 'contents';
+  container.append(wrap, others);
+  return container;
+}
+
+/** A rival's progress: their step count, and their ladder once the round is over. */
+function poopleCard(snap, id, b) {
+  const m = member(snap, id);
+  const el = document.createElement('div');
+  el.className = 'other' + (b.arrivedAt !== null ? ' done' : '') + (b.forfeited || m.role === 'away' ? ' left' : '');
+  const count = document.createElement('div');
+  count.className = 'ocount';
+  count.textContent = b.count;
+  const name = document.createElement('div');
+  name.className = 'oname';
+  name.textContent = m.name;
+  const stat = document.createElement('div');
+  stat.className = 'ostat';
+  stat.textContent = b.forfeited ? 'left' : m.role === 'away' ? 'away' : b.arrivedAt !== null ? `reached in ${b.arrivedAt}` : `step${b.count === 1 ? '' : 's'}`;
+  const text = document.createElement('div');
+  text.className = 'other-text';
+  text.append(name, stat);
+  if (b.steps) {
+    const words = document.createElement('div');
+    words.className = 'oladder';
+    words.textContent = [snap.round.start, ...b.steps].join(' → ');
+    text.appendChild(words);
+  }
+  el.append(count, text);
+  return el;
+}
+
 function resultCard(snap) {
   const card = document.createElement('div');
   card.className = 'result';
@@ -633,18 +775,22 @@ function resultCard(snap) {
     h.textContent = meWon ? 'You tied!' : `Tie: ${names.join(' & ')}`;
   } else {
     emoji.textContent = '😶';
-    h.textContent = 'Nobody got it';
+    h.textContent = res.kind === 'poople' ? `Nobody reached ${res.target.toUpperCase()}` : 'Nobody got it';
   }
   card.append(emoji, h);
 
-  const word = document.createElement('div');
-  word.className = 'word';
-  for (const ch of res.secret) {
-    const s = document.createElement('span');
-    s.textContent = ch;
-    word.appendChild(s);
+  if (res.kind === 'poople') {
+    card.appendChild(poopleResult(res));
+  } else {
+    const word = document.createElement('div');
+    word.className = 'word';
+    for (const ch of res.secret) {
+      const s = document.createElement('span');
+      s.textContent = ch;
+      word.appendChild(s);
+    }
+    card.appendChild(word);
   }
-  card.appendChild(word);
 
   const board = document.createElement('div');
   board.className = 'scoreboard';
@@ -659,7 +805,14 @@ function resultCard(snap) {
     const s = document.createElement('span');
     s.className = 'ss';
     s.textContent = snap.score[id];
-    row.append(avatarEl(m), n, s);
+    row.append(avatarEl(m), n);
+    if (res.kind === 'poople' && id in res.steps) {
+      const st = document.createElement('span');
+      st.className = 'st';
+      st.textContent = res.steps[id] !== null ? `${res.steps[id]} step${res.steps[id] === 1 ? '' : 's'}` : 'did not finish';
+      row.appendChild(st);
+    }
+    row.appendChild(s);
     board.appendChild(row);
   }
   if (snap.score.draws) {
@@ -678,6 +831,36 @@ function resultCard(snap) {
   cd.id = 'next-countdown';
   card.appendChild(cd);
   return card;
+}
+
+/** Poople result: the winning step count against par, and one shortest path. */
+function poopleResult(res) {
+  const box = document.createElement('div');
+  box.className = 'poople-result';
+  const best = res.winnerIds.length ? res.steps[res.winnerIds[0]] : null;
+  const sub = document.createElement('p');
+  sub.className = 'sub';
+  sub.textContent =
+    best === null ? `Par was ${res.par}` : best === res.par ? `${best} steps — a perfect ladder!` : `${best} steps · par ${res.par}`;
+  const label = document.createElement('p');
+  label.className = 'path-label';
+  label.textContent = 'A shortest path';
+  const path = document.createElement('div');
+  path.className = 'path';
+  res.path.forEach((w, i) => {
+    if (i) {
+      const arr = document.createElement('span');
+      arr.className = 'arr';
+      arr.textContent = '→';
+      path.appendChild(arr);
+    }
+    const pw = document.createElement('span');
+    pw.className = 'pw' + (i === res.path.length - 1 ? ' end' : '');
+    pw.textContent = w;
+    path.appendChild(pw);
+  });
+  box.append(sub, label, path);
+  return box;
 }
 
 /**
@@ -732,7 +915,7 @@ function nextRoundBlock(snap) {
     row.className = 'next-secs';
     const lbl = document.createElement('span');
     lbl.className = 'turns-label';
-    lbl.textContent = snap.settings.mode === 'turn' ? 'Seconds per turn' : 'Seconds per guess';
+    lbl.textContent = secondsLabel(snap.settings.mode);
     row.append(lbl, secondsPicker(snap, isHost));
     block.appendChild(row);
   }
@@ -799,7 +982,7 @@ function onKey(key) {
   const snap = state.snap;
   if (!snap || !canGuess(snap) || state.pending) return;
   if (key === 'enter') {
-    if (state.typed.length !== WORD_LEN) {
+    if (state.typed.length !== wordLen(snap)) {
       state.shakeRow = true;
       toast('Not enough letters');
       render();
@@ -816,7 +999,7 @@ function onKey(key) {
     }
     return;
   }
-  if (/^[a-z]$/.test(key) && state.typed.length < WORD_LEN) {
+  if (/^[a-z]$/.test(key) && state.typed.length < wordLen(snap)) {
     state.typed += key;
     render();
   }
@@ -860,9 +1043,8 @@ function tickTimer() {
   if (!snap || snap.phase !== 'playing') {
     fill.style.width = '0%';
   } else {
-    const r = snap.round;
     const total = snap.settings.turnSeconds * 1000;
-    const dl = r.kind === 'turn' ? r.deadline : (r.boards[snap.me]?.deadline ?? null);
+    const dl = myDeadline(snap);
     if (dl) {
       const left = Math.max(0, dl - (Date.now() + state.offset));
       fill.style.width = `${(100 * left) / total}%`;
